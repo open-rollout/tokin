@@ -51,7 +51,7 @@ fi
 
 # Runtime credentials belong in a private file, never in argv or shell tracing.
 umask 077
-RUNTIME_ENV=$(mktemp "$RUN_ROOT/runtime-env.XXXXXX.json")
+RUNTIME_ENV=$(mktemp "${TMPDIR:-/tmp}/runtime-env.XXXXXX.json")
 trap 'rm -f -- "$RUNTIME_ENV"' EXIT
 python - "$RUNTIME_ENV" <<'PY'
 import json, os, sys

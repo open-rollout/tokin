@@ -19,7 +19,7 @@ pip install --target "$HARBOR_DIR" "tokin[harbor]"
 
 ```bash
 hf download FineEnvs/MiMo-V2.6-RL-harbor-code --repo-type dataset \
-    --revision cf87dbe426ae26d15ca416ec599e549f65f84249 --include "tasks/*" --local-dir "$DATA"
+    --revision cf87dbe426ae26d15ca416ec599e549f65f84249 --include "tasks/*" --local-dir "$DATA" &&
 python - "$DATA" <<'PY'
 import json, sys
 from pathlib import Path
@@ -30,6 +30,8 @@ with open(data / "train.jsonl", "w") as rows:
         rows.write(json.dumps({"prompt": [{"role": "user", "content": task}], "label": task, "metadata": {"task": task}}) + "\n")
 PY
 ```
+
+The download is 21,584 files and resumes if run again; without `HF_TOKEN` the Hub may rate-limit it. `train.jsonl` holds 2,442 tasks.
 
 **3. Build the pi archive**, on a Linux x86_64 host:
 
@@ -57,7 +59,7 @@ The recipe and every other setting are in `run_qwen38_27b.sh`.
 
 ## Notes
 
-- slime's `--save-hf` writes only the trained parameters ([`hf_checkpoint_saver.py#L94`](https://github.com/THUDM/slime/blob/859938dcb2b0791dbae9084a4d9ae91a4f38f3b7/slime/backends/megatron_utils/hf_checkpoint_saver.py#L94)), so a Qwen3.8 save lacks the base's `mtp.*` and `model.visual.*` tensors. To serve a save, convert its torch_dist checkpoint with slime's `tools/convert_torch_dist_to_hf.py --add-missing-from-origin-hf`.
+- slime's `--save-hf` writes only the trained parameters ([`hf_checkpoint_saver.py#L94`](https://github.com/THUDM/slime/blob/859938dcb2b0791dbae9084a4d9ae91a4f38f3b7/slime/backends/megatron_utils/hf_checkpoint_saver.py#L94)), so a Qwen3.8 save lacks the base's `mtp.*` and `model.visual.*` tensors. slime's `tools/convert_torch_dist_to_hf.py` does not read this recipe's torch_dist saves either: it loads `common.pt`, which Megatron now keeps inside the checkpoint, and does not know the native GDN's `in_proj` and `conv1d`, saved as their parts. To serve a save, add `--save-hf "$RUN_ROOT/hf/iter_{rollout_id}"` and copy the base's `mtp.*` and `model.visual.*` tensors into it.
 - A save waits for every in-flight trial to finish ([`rollout.py#L414-L428`](https://github.com/THUDM/slime/blob/859938dcb2b0791dbae9084a4d9ae91a4f38f3b7/slime/ray/rollout.py#L414-L428)), up to the agent's time budget.
 
 ## Acknowledgement
