@@ -48,7 +48,7 @@ RAY_ADDRESS=... RAY_DASHBOARD_ADDRESS=... PROMPT_DATA="$DATA/train.jsonl" MIMO_T
 HARBOR_DIR=... PI_ARCHIVE=... examples/pi_mimo_rl/run_qwen38_27b.sh
 ```
 
-The recipe and every other setting are in `run_qwen38_27b.sh`.
+For Qwen3.5-35B-A3B, run `run_qwen35_35b_a3b.sh` the same way with `HF_CHECKPOINT=.../Qwen3.5-35B-A3B`: an MoE model, trained with rollout routing replay and a larger batch. Each script holds the recipe and every other setting.
 
 ## How it works
 
@@ -59,7 +59,7 @@ The recipe and every other setting are in `run_qwen38_27b.sh`.
 
 ## Notes
 
-- slime's `--save-hf` writes only the trained parameters ([`hf_checkpoint_saver.py#L94`](https://github.com/THUDM/slime/blob/859938dcb2b0791dbae9084a4d9ae91a4f38f3b7/slime/backends/megatron_utils/hf_checkpoint_saver.py#L94)), so a Qwen3.8 save lacks the base's `mtp.*` and `model.visual.*` tensors. slime's `tools/convert_torch_dist_to_hf.py` does not read this recipe's torch_dist saves either: it loads `common.pt`, which Megatron now keeps inside the checkpoint, and does not know the native GDN's `in_proj` and `conv1d`, saved as their parts. To serve a save, add `--save-hf "$RUN_ROOT/hf/iter_{rollout_id}"` and copy the base's `mtp.*` and `model.visual.*` tensors into it.
+- slime's `--save-hf` writes only the trained parameters ([`hf_checkpoint_saver.py#L94`](https://github.com/THUDM/slime/blob/859938dcb2b0791dbae9084a4d9ae91a4f38f3b7/slime/backends/megatron_utils/hf_checkpoint_saver.py#L94)), so a save lacks the base's `mtp.*` and `model.visual.*` tensors. slime's `tools/convert_torch_dist_to_hf.py` does not read this recipe's torch_dist saves either: it loads `common.pt`, which Megatron now keeps inside the checkpoint, and does not know the native GDN's `in_proj` and `conv1d`, saved as their parts. To serve a save, add `--save-hf "$RUN_ROOT/hf/iter_{rollout_id}"` and copy the base's `mtp.*` and `model.visual.*` tensors into it.
 - A save waits for every in-flight trial to finish ([`rollout.py#L414-L428`](https://github.com/THUDM/slime/blob/859938dcb2b0791dbae9084a4d9ae91a4f38f3b7/slime/ray/rollout.py#L414-L428)), up to the agent's time budget.
 
 ## Acknowledgement
