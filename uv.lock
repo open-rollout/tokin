@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'darwin'",
@@ -790,6 +790,15 @@ wheels = [
 ]
 
 [[package]]
+name = "dockerfile-parse"
+version = "2.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/92/df/929ee0b5d2c8bd8d713c45e71b94ab57c7e11e322130724d54f469b2cd48/dockerfile-parse-2.0.1.tar.gz", hash = "sha256:3184ccdc513221983e503ac00e1aa504a2aa8f84e5de673c46b0b6eee99ec7bc", size = 24556, upload-time = "2023-07-18T13:36:07.897Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7a/6c/79cd5bc1b880d8c1a9a5550aa8dacd57353fa3bb2457227e1fb47383eb49/dockerfile_parse-2.0.1-py2.py3-none-any.whl", hash = "sha256:bdffd126d2eb26acf1066acb54cb2e336682e1d72b974a40894fac76a4df17f6", size = 14845, upload-time = "2023-07-18T13:36:06.052Z" },
+]
+
+[[package]]
 name = "e2b"
 version = "2.59.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1040,6 +1049,12 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/82/7d/16e21cfd52938260dce71ff77ec1ed156bd8c327642760fe66163b0cd3ce/harbor-0.24.0.tar.gz", hash = "sha256:6c5185e6a76abc677ed3f95e688dc0dbf8597e4fa50847cb9a37a4448c91b1e5", size = 2090577, upload-time = "2026-10-05T05:04:46.252Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9e/63/0e3d788e8d1ed116125507c6a01e3fb95cf82be71f2ea7040a1458709d21/harbor-0.24.0-py3-none-any.whl", hash = "sha256:23b7ba616a3aae4eff561ced5e2c51c7186f2981e53a770dea9c689d3969877c", size = 2331740, upload-time = "2026-10-05T05:04:42.088Z" },
+]
+
+[package.optional-dependencies]
+e2b = [
+    { name = "dockerfile-parse" },
+    { name = "e2b" },
 ]
 
 [[package]]
@@ -3028,7 +3043,7 @@ dependencies = [
 [package.optional-dependencies]
 harbor = [
     { name = "e2b" },
-    { name = "harbor" },
+    { name = "harbor", extra = ["e2b"] },
     { name = "uv" },
 ]
 
@@ -3048,7 +3063,7 @@ dev = [
 requires-dist = [
     { name = "e2b", marker = "extra == 'harbor'", specifier = ">=2.25" },
     { name = "fastapi", specifier = ">=0.115" },
-    { name = "harbor", marker = "extra == 'harbor'", specifier = ">=0.24,<0.25" },
+    { name = "harbor", extras = ["e2b"], marker = "extra == 'harbor'", specifier = ">=0.24,<0.25" },
     { name = "httpx2", specifier = ">=2.7" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "numpy", specifier = ">=2" },
