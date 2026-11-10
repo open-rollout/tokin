@@ -60,7 +60,7 @@ For Qwen3.5-35B-A3B, run `run_qwen35_35b_a3b.sh` the same way with `HF_CHECKPOIN
 ## Notes
 
 - slime's `--save-hf` writes only the trained parameters ([`hf_checkpoint_saver.py#L94`](https://github.com/THUDM/slime/blob/859938dcb2b0791dbae9084a4d9ae91a4f38f3b7/slime/backends/megatron_utils/hf_checkpoint_saver.py#L94)), so a save lacks the base's `mtp.*` and `model.visual.*` tensors. slime's `tools/convert_torch_dist_to_hf.py` does not read this recipe's torch_dist saves either: it loads `common.pt`, which Megatron now keeps inside the checkpoint, and does not know the native GDN's `in_proj` and `conv1d`, saved as their parts. To serve a save, add `--save-hf "$RUN_ROOT/hf/iter_{rollout_id}"` and copy the base's `mtp.*` and `model.visual.*` tensors into it.
-- Trials in flight are about `--sglang-server-concurrency` × engines × `--fully-async-group-prefetch-factor`, some 330 for both scripts. Our runs held them to 64 (27B) and 192 (35B) to keep sandbox errors down; lower these flags if your sandboxes fail under load.
+- The number of trials running at once is about `--sglang-server-concurrency` × the number of engines × `--fully-async-group-prefetch-factor`: 14 × 12 × 2 ≈ 330 with either script as written. Our runs capped it at 64 (27B) and 192 (35B) to keep sandbox errors down; if your sandboxes fail under load, lower `--sglang-server-concurrency` or the prefetch factor.
 - A save waits for every in-flight trial to finish ([`rollout.py#L414-L428`](https://github.com/THUDM/slime/blob/859938dcb2b0791dbae9084a4d9ae91a4f38f3b7/slime/ray/rollout.py#L414-L428)), up to the agent's time budget.
 
 ## Acknowledgement
