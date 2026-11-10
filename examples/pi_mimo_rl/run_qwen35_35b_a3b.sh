@@ -68,6 +68,8 @@ with open(sys.argv[1], "w") as stream:
     json.dump({"env_vars": {k: os.environ[k] for k in keys if k in os.environ}}, stream)
 PY
 
+# The job's close cancels the trials still running and waits up to 300 s for each to tear its sandbox down, past
+# slime's default 60 s cleanup budget, which would fail a finished run.
 cd "$SLIME_DIR"
 ray job submit --address="$RAY_DASHBOARD_ADDRESS" --runtime-env="$RUNTIME_ENV" -- \
     python -u "$SLIME_DIR/train.py" \
@@ -87,7 +89,7 @@ ray job submit --address="$RAY_DASHBOARD_ADDRESS" --runtime-env="$RUNTIME_ENV" -
     --rollout-max-context-len 131072 --rollout-max-response-len 8192 \
     --rollout-temperature 1 --rollout-top-p 0.95 --rollout-stop-token-ids 248046 248044 \
     --use-score-centering --use-tis --tis-clip 2 --tis-clip-low 0 \
-    --partial-rollout --flush-cache-interval 3 \
+    --partial-rollout --flush-cache-interval 3 --rollout-cleanup-timeout 900 \
     --tensor-model-parallel-size 2 --pipeline-model-parallel-size 1 --context-parallel-size 4 --sequence-parallel \
     --expert-model-parallel-size 8 --expert-tensor-parallel-size 1 \
     --qwen-gdn-implementation megatron \
