@@ -18,12 +18,10 @@
   </picture>
 </p>
 
-**tokin** is a gateway between an agent harness and an inference engine. The harness
-keeps speaking text over a standard chat-completions API; the engine only ever receives
-token ids. In between, tokin keeps each sample's session as a tree of turns, renders
-every prompt by appending to the ids the model already sampled instead of re-encoding
-text, and parses each generation back into an assistant message with its reasoning and
-tool calls. Each leaf of the tree is a rollout a trainer can use as is.
+**tokin** makes any agent harness token-native. Train an agent in the harness it ships with, on exactly the tokens
+it sampled. Point the harness at tokin instead of the inference engine and nothing else changes: it keeps speaking
+text over chat completions, while the engine only ever sees token ids. tokin keeps each session as a tree of turns, so
+every rollout a trainer collects is token-in, token-out at every prefix.
 
 ## Quick start
 
@@ -67,3 +65,8 @@ Collect the session, one JSON line per rollout with its `token_ids`, `loss_mask`
 ```bash
 tokin collect "$URL" -o rollouts.jsonl
 ```
+
+## Examples
+
+- [`examples/harbor_eval`](examples/harbor_eval): evaluate mini-swe-agent, opencode or pi through tokin on [Harbor](https://github.com/harbor-framework/harbor).
+- [`examples/pi_mimo_rl`](examples/pi_mimo_rl): train pi, unchanged, with slime on MiMo-V2.6-RL-oss.
