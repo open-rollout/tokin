@@ -18,12 +18,11 @@
   </picture>
 </p>
 
-**tokin** is a gateway between an agent harness and an inference engine. The harness
-keeps speaking text over a standard chat-completions API; the engine only ever receives
-token ids. In between, tokin keeps each sample's session as a tree of turns, renders
-every prompt by appending to the ids the model already sampled instead of re-encoding
-text, and parses each generation back into an assistant message with its reasoning and
-tool calls. Each leaf of the tree is a rollout a trainer can use as is.
+**tokin** makes any agent harness token-native. Its goal is to manage multi-turn agent rollouts for RL
+correctly and efficiently. Point the harness at tokin instead of the inference engine and nothing else changes: it
+keeps speaking text over chat completions, while the engine only ever sees token ids. tokin keeps each session as a
+tree of turns and encodes only what each request adds, never what the model sampled, so every rollout a trainer
+collects is exactly the tokens the policy produced: token-in, token-out at every prefix.
 
 ## Quick start
 
