@@ -67,3 +67,8 @@ Collect the session, one JSON line per rollout with its `token_ids`, `loss_mask`
 ```bash
 tokin collect "$URL" -o rollouts.jsonl
 ```
+
+## Examples
+
+- [`examples/harbor_eval`](examples/harbor_eval): evaluate mini-swe-agent, opencode or pi through tokin on [Harbor](https://github.com/harbor-framework/harbor).
+- [`examples/pi_mimo_rl`](examples/pi_mimo_rl): train pi, unchanged, with slime on MiMo-V2.6-RL-oss.
