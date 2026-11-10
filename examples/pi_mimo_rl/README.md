@@ -4,7 +4,7 @@ Fully asynchronous coding agent RL of [pi](https://github.com/earendil-works/pi)
 
 ## Run
 
-**0. Requirements:** slime at `859938dc` or later on its image `nightly-dev-20261016b-cu130` or later, which score
+**0. Requirements:** slime at [`859938dc`](https://github.com/THUDM/slime/commit/859938dcb2b0791dbae9084a4d9ae91a4f38f3b7) or later on its image `nightly-dev-20261016b-cu130` or later, which score
 centering needs.
 
 **1. Install**, on every node, tokin into slime's python, and tokin with its `harbor` extra into a directory the
@@ -45,7 +45,7 @@ PYTHONPATH="$HARBOR_DIR" python examples/pi_mimo_rl/pi.py "$RUN_ROOT/cache"
 export E2B_API_KEY=...
 SLIME_DIR=... MEGATRON_DIR=... HF_CHECKPOINT=.../Qwen3.8-27B RUN_ROOT=... SOCKET_IFNAME=... \
 RAY_ADDRESS=... RAY_DASHBOARD_ADDRESS=... PROMPT_DATA="$DATA/train.jsonl" MIMO_TASKS="$DATA/tasks" \
-HARBOR_DIR=... PI_ARCHIVE=... examples/pi_mimo_rl/run_qwen38_27b.sh
+HARBOR_DIR=... PI_ARCHIVE=... SAVE_INTERVAL=10 examples/pi_mimo_rl/run_qwen38_27b.sh
 ```
 
 For Qwen3.5-35B-A3B, run `run_qwen35_35b_a3b.sh` the same way with `HF_CHECKPOINT=.../Qwen3.5-35B-A3B`: an MoE model, trained with rollout routing replay and a larger batch. Each script holds the recipe and every other setting.
