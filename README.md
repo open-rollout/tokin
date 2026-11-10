@@ -18,11 +18,11 @@
   </picture>
 </p>
 
-**tokin** makes any agent harness token-native. Its goal is to manage multi-turn agent rollouts for RL
-correctly and efficiently. Point the harness at tokin instead of the inference engine and nothing else changes: it
-keeps speaking text over chat completions, while the engine only ever sees token ids. tokin keeps each session as a
-tree of turns and encodes only what each request adds, never what the model sampled, so every rollout a trainer
-collects is exactly the tokens the policy produced: token-in, token-out at every prefix.
+**tokin** makes any agent harness token-native. Its goal: train an agent in the harness it ships with, on exactly
+the tokens it sampled. Point the harness at tokin instead of the inference engine and nothing else changes: it keeps
+speaking text over chat completions, while the engine only ever sees token ids. tokin keeps each session as a tree of
+turns and encodes only what each request adds, never what the model sampled, so every rollout a trainer collects is
+token-in, token-out at every prefix.
 
 ## Quick start
 
