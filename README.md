@@ -9,6 +9,7 @@
   <a href="https://github.com/open-rollout/tokin/actions/workflows/ci.yml"><img src="https://github.com/open-rollout/tokin/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://pypi.org/project/tokin/"><img src="https://img.shields.io/pypi/v/tokin" alt="PyPI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/open-rollout/tokin" alt="License"></a>
+  <a href="https://www.yuanhe.wiki/posts/technical/tokin/"><img src="https://img.shields.io/badge/blog-tokin-blue?logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0xMiAyMGg5Ii8%2BPHBhdGggZD0iTTE2LjQgMy42YTIuMSAyLjEgMCAxIDEgMyAzTDcgMTlsLTQgMSAxLTR6Ii8%2BPC9zdmc%2B" alt="Blog"></a>
 </p>
 
 <p align="center">
