@@ -67,5 +67,5 @@ Terminal-Bench 2.1 is 89 tasks × 4 samples and SWE-bench Verified 500 tasks × 
 ```
 
 tokin (with TITO) does not move these scores: against the same gateway re-rendering each turn from text, Qwen3.6's
-2,568 paired samples on Terminal-Bench 2.1 and SWE-bench Verified differ by −0.002 [−0.018, +0.015]. What it removes
+2,568 paired samples on Terminal-Bench 2.1 and SWE-bench Verified give tokin minus re-rendering +0.001 [−0.015, +0.017]. What it removes
 is the gap to training: every token a trainer reads back is one the model sampled.
