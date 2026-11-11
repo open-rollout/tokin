@@ -125,7 +125,7 @@
 <text class="sans cap lt" x="20" y="88">TEXT IN, TEXT OUT</text>
 <text class="sans note" x="20" y="106">one session per sample</text>
 <rect class="card any" x="20" y="278" width="202" height="42" rx="12"/>
-<text class="sans sname lt" x="121" y="304" text-anchor="middle">+ any harness, unchanged</text>
+<text class="sans sname lt" x="121" y="304" text-anchor="middle">+ any harness</text>
 <path class="wt" d="M236 154 H254.6" marker-end="url(#mt)"/>
 <rect class="card" x="20" y="116" width="186" height="46" rx="12"/>
 <rect class="icon-box" x="32" y="128" width="22" height="22" rx="6"/>

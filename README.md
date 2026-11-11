@@ -14,7 +14,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/gateway-dark.svg">
-    <img src="assets/gateway-light.svg" alt="tokin as a gateway. Harnesses, any harness unchanged, each call their own session URL with chat completions in text. Inside tokin each turn is attached to its place in its session's tree; rendered, keeping the ids the model sampled for rollouts, rollout and s, where re-encoding the text would split it as roll and outs; generated on the inference engine from input tokens to output tokens; and parsed back into an assistant message, {&quot;role&quot;: &quot;assistant&quot;, …}, with reasoning and tool calls for its harness. The turn's ids grow the session's tree at that place, each leaf a rollout with token_ids, loss_mask and logprobs, which a trainer collects to update the weights the engine serves." width="100%">
+    <img src="assets/gateway-light.svg" alt="tokin as a gateway. Harnesses, any harness, each call their own session URL with chat completions in text. Inside tokin each turn is attached to its place in its session's tree; rendered, keeping the ids the model sampled for rollouts, rollout and s, where re-encoding the text would split it as roll and outs; generated on the inference engine from input tokens to output tokens; and parsed back into an assistant message, {&quot;role&quot;: &quot;assistant&quot;, …}, with reasoning and tool calls for its harness. The turn's ids grow the session's tree at that place, each leaf a rollout with token_ids, loss_mask and logprobs, which a trainer collects to update the weights the engine serves." width="100%">
   </picture>
 </p>
 
