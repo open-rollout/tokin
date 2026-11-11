@@ -108,7 +108,7 @@ def open_session(url: str, params: str) -> None:
 def collect(session_url: str, output: IO[str]) -> None:
     """Collect the session at `SESSION_URL` and delete it there, writing one JSON line per rollout.
 
-    A line holds the rollout's `token_ids` and `loss_mask`, and its `logprobs` when the session returns them.
+    A line holds the rollout's `token_ids` and `loss_mask`, and its `logprobs` when every turn of it carries them.
     """
     if (match := _SESSION_URL.fullmatch(session_url)) is None:
         raise click.BadParameter(
@@ -122,6 +122,7 @@ def collect(session_url: str, output: IO[str]) -> None:
     session = asyncio.run(run())
     for rollout in session.rollouts:
         line: dict[str, Any] = {"token_ids": rollout.token_ids, "loss_mask": rollout.loss_mask}
-        if session.params.get("return_logprobs"):
+        # The gateway returns logprobs unless a session turns them off, so the turns, not the params, say.
+        if all(turn.generation.logprobs is not None for turn in rollout.turns):
             line["logprobs"] = rollout.logprobs
         output.write(json.dumps(line) + "\n")

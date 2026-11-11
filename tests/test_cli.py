@@ -87,7 +87,8 @@ def test_open_prints_the_session_base_url(tokin):
 
 
 def test_collect_writes_each_rollout_and_deletes_the_session(tokin):
-    url = invoke("open", "--params", '{"return_logprobs": true}').output.strip()
+    # Default params: the gateway returns logprobs without being asked, and they are written.
+    url = invoke("open").output.strip()
 
     async def turn():
         async with cli.httpx2.AsyncClient(base_url=url) as client:
