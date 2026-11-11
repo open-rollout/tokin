@@ -83,7 +83,7 @@ ray job submit --address="$RAY_DASHBOARD_ADDRESS" --runtime-env="$RUNTIME_ENV" -
     --dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std \
     --prompt-data "$PROMPT_DATA" --input-key prompt --label-key label --metadata-key metadata \
     --rollout-shuffle --apply-chat-template-kwargs '{}' \
-    --num-rollout 150 --rollout-batch-size 64 --n-samples-per-prompt 16 \
+    --num-rollout 140 --rollout-batch-size 64 --n-samples-per-prompt 16 \
     --global-batch-size 1024 --num-steps-per-rollout 1 --micro-batch-size 1 \
     --decrease-batch-size-if-needed --eval-global-batch-size 3 \
     --rollout-max-context-len 131072 --rollout-max-response-len 8192 \
