@@ -14,6 +14,9 @@ from .session import Session
 
 logger = logging.getLogger(__name__)
 
+# What a turn asks of the engine when neither the request nor its session says otherwise.
+DEFAULT_PARAMS: GenerationParams = {"return_logprobs": True}
+
 
 class GatewayError(Exception):
     """A request the gateway refuses; the subclass says with which status."""
@@ -191,7 +194,7 @@ class Gateway:
             if room < 1:
                 raise ContextLengthExceededError(len(rollout) + len(prompt), self.context_length)
             params: GenerationParams = {
-                "return_logprobs": True,
+                **DEFAULT_PARAMS,
                 **request.params,
                 **session.params,
                 "stop_ids": self.template.stop_ids,
