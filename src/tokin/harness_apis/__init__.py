@@ -1,4 +1,7 @@
 from .openai_chat import OpenAIChatRequest
+from .openai_responses import OpenAIResponsesRequest
 from .request import HarnessRequest
 
-__all__ = ["HarnessRequest", "OpenAIChatRequest"]
+HARNESS_APIS: tuple[type[HarnessRequest], ...] = (OpenAIChatRequest, OpenAIResponsesRequest)
+
+__all__ = ["HARNESS_APIS", "HarnessRequest", "OpenAIChatRequest", "OpenAIResponsesRequest"]

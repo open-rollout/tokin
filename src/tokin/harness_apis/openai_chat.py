@@ -35,13 +35,14 @@ class OpenAIChatRequest(HarnessRequest, extra="forbid"):
     Undeclared keys are refused by name, not ignored: an ignored key changes the response unannounced.
     """
 
+    path = "/chat/completions"
+
     model: str
     messages: list[Message]
     tools: list[ToolSchema] | None = None
     max_tokens: int | None = Field(None, ge=1, validation_alias=AliasChoices("max_completion_tokens", "max_tokens"))
     temperature: float | None = None
     top_p: float | None = None
-    stream: bool = False
     stream_options: ChatCompletionStreamOptionsParam | None = None
     store: Literal[False] | None = None
     tool_choice: Literal["auto"] | None = None
@@ -82,6 +83,9 @@ class OpenAIChatRequest(HarnessRequest, extra="forbid"):
         # A field named as a `GenerationParams` key means the same to the engine.
         params = self.model_dump(include=set(GenerationParams.__optional_keys__), exclude_none=True)
         return ChatRequest(self.messages, self.tools, cast(GenerationParams, params))
+
+    def start_events(self) -> list[str]:
+        return []
 
     def keepalive_event(self) -> str:
         return ": keep-alive\n\n"
