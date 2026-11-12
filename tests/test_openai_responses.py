@@ -3,11 +3,28 @@ from http import HTTPStatus
 
 import pytest
 from conftest import said
+from fastapi.encoders import jsonable_encoder
+from openai.types.responses import (
+    CustomToolParam,
+    EasyInputMessageParam,
+    FunctionToolParam,
+    NamespaceToolParam,
+    ResponseCustomToolCallOutputParam,
+    ResponseCustomToolCallParam,
+    ResponseFunctionToolCallParam,
+    ResponseInputTextParam,
+    ResponseOutputMessageParam,
+    ResponseOutputTextParam,
+    ResponseReasoningItemParam,
+)
 from openai.types.responses.response_create_params import ResponseCreateParamsStreaming
+from openai.types.responses.response_input_item_param import FunctionCallOutput
+from openai.types.responses.response_reasoning_item_param import Content
+from openai.types.shared_params.custom_tool_input_format import Grammar, Text
 from pydantic import ValidationError
 
 from tokin.gateway import ChatResponse, ContextLengthExceededError
-from tokin.harness_apis import OpenAIChatRequest, OpenAIResponsesRequest
+from tokin.harness_apis import OpenAIChatRequest, OpenAIResponsesRequest, openai_responses as responses
 from tokin.rollout import FinishReason, Generation
 from tokin.session import Session
 
@@ -39,6 +56,10 @@ EXTRA = {"client_metadata"}
 USER = {"type": "message", "role": "user", "content": "hi"}
 TOOL = {"type": "function", "name": "f", "description": "d", "strict": False, "parameters": {"type": "object"}}
 CALL = {"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+GRAMMAR = {"type": "grammar", "syntax": "lark", "definition": "start: x"}
+PATCH = {"type": "custom", "name": "apply_patch", "description": "d", "format": GRAMMAR}
+CLOCK = {"type": "namespace", "name": "clock", "description": "Time.", "tools": [{**TOOL, "name": "sleep"}]}
+PATCH_CALL = {"id": "c1", "type": "function", "function": {"name": "apply_patch", "arguments": '{"input": "p"}'}}
 
 
 def request(**over):
@@ -55,6 +76,30 @@ def test_every_openai_key_is_served_or_listed_unserved():
     served = set(OpenAIResponsesRequest.model_fields) - EXTRA
     assert served <= upstream
     assert upstream - served == UNSERVED
+
+
+# Each of `tokin`'s Responses types, and OpenAI's it declares a part of.
+DECLARED = {
+    responses.TextPart: (ResponseInputTextParam, ResponseOutputTextParam),
+    responses.MessageItem: (EasyInputMessageParam, ResponseOutputMessageParam),
+    responses.ReasoningText: Content,
+    responses.ReasoningItem: ResponseReasoningItemParam,
+    responses.FunctionCallItem: ResponseFunctionToolCallParam,
+    responses.FunctionCallOutputItem: FunctionCallOutput,
+    responses.CustomToolCallItem: ResponseCustomToolCallParam,
+    responses.CustomToolCallOutputItem: ResponseCustomToolCallOutputParam,
+    responses.FunctionTool: FunctionToolParam,
+    responses.TextFormat: Text,
+    responses.GrammarFormat: Grammar,
+    responses.CustomTool: CustomToolParam,
+    responses.NamespaceTool: NamespaceToolParam,
+}
+
+
+@pytest.mark.parametrize(("declared", "upstream"), DECLARED.items(), ids=[t.__name__ for t in DECLARED])
+def test_declared_keys_are_openais(declared, upstream):
+    keys = set().union(*(t.__annotations__ for t in (upstream if isinstance(upstream, tuple) else (upstream,))))
+    assert set(getattr(declared, "model_fields", None) or declared.__annotations__) <= keys
 
 
 def test_chat_request_params_leave_out_what_the_harness_did_not_set():
@@ -77,6 +122,21 @@ def test_tools_become_chat_functions_in_the_order_sent():
 def test_a_tools_nulls_are_left_out_of_its_function():
     (tool,) = request(tools=[{**TOOL, "description": None, "parameters": None}]).chat_request().tools
     assert tool["function"] == {"name": "f", "strict": False}
+
+
+def test_a_custom_tool_is_a_function_of_one_string_input_its_grammar_describes():
+    (tool,) = request(tools=[PATCH]).chat_request().tools
+    text = {"type": "string", "description": "Must match this lark grammar:\nstart: x"}
+    assert tool["function"] == {
+        "name": "apply_patch",
+        "description": "d",
+        "parameters": {"type": "object", "properties": {"input": text}, "required": ["input"]},
+    }
+
+
+def test_a_namespaces_functions_are_named_and_described_within_it():
+    (tool,) = request(tools=[CLOCK]).chat_request().tools
+    assert (tool["function"]["name"], tool["function"]["description"]) == ("clock.sleep", "Time.\n\nd")
 
 
 def test_leading_system_and_developer_messages_become_one_system_message():
@@ -103,6 +163,21 @@ def test_function_calls_join_the_reply_and_outputs_answer_them():
     ]
 
 
+def test_custom_tool_calls_are_calls_of_their_input_and_outputs_answer_them():
+    call = {"type": "custom_tool_call", "call_id": "c1", "name": "apply_patch", "input": "p"}
+    output = {"type": "custom_tool_call_output", "call_id": "c1", "output": "done"}
+    assert request(input=[USER, call, output]).chat_request().messages[1:] == [
+        {"role": "assistant", "content": None, "tool_calls": [PATCH_CALL]},
+        {"role": "tool", "tool_call_id": "c1", "content": "done"},
+    ]
+
+
+def test_a_namespaced_function_call_is_called_by_its_name_within_the_namespace():
+    call = {"type": "function_call", "call_id": "c1", "namespace": "clock", "name": "sleep", "arguments": "{}"}
+    (message,) = request(input=[USER, call]).chat_request().messages[1:]
+    assert message["tool_calls"][0]["function"]["name"] == "clock.sleep"
+
+
 def test_a_reasoning_item_becomes_the_reasoning_of_its_reply():
     thought = {"type": "reasoning", "summary": [], "content": [{"type": "reasoning_text", "text": "hm"}]}
     answer = {"type": "message", "role": "assistant", "content": "ok"}
@@ -117,6 +192,27 @@ async def test_a_reply_with_reasoning_sent_back_continues_its_turn(gateway):
     output = first.response(await g.chat(session, first.chat_request())).model_dump(exclude_unset=True)["output"]
     await g.chat(session, request(input=[USER, *output, {**USER, "content": "again"}]).chat_request())
     assert output[0]["type"] == "reasoning" and session.turns[1].parent == 0
+
+
+async def test_custom_and_namespaced_calls_sent_back_continue_their_turn(gateway):
+    calls = [{"name": "apply_patch", "arguments": {"input": "p"}}, {"name": "clock.sleep", "arguments": {}}]
+    text = "".join(f"<tool_call>{json.dumps(c)}</tool_call>" for c in calls)
+    g, session = gateway(said(text), said("done")), Session()
+    first = request(tools=[PATCH, CLOCK])
+    served = await g.chat(session, first.chat_request())
+    output = first.response(served).model_dump(exclude_unset=True)["output"]
+    results = [{"type": f"{item['type']}_output", "call_id": item["call_id"], "output": "ok"} for item in output]
+    again = request(tools=[PATCH, CLOCK], input=[USER, *output, *results]).chat_request()
+    await g.chat(session, again)
+    assert again.messages[1]["tool_calls"] == served.message["tool_calls"] and session.turns[1].parent == 0
+
+
+def test_a_response_not_streamed_is_taken_back_as_served():
+    calls = [PATCH_CALL, {**CALL, "id": "c2", "function": {"name": "clock.sleep", "arguments": "{}"}}]
+    message = {"role": "assistant", "content": "ok", "reasoning_content": "hm", "tool_calls": calls}
+    served = jsonable_encoder(request(tools=[PATCH, CLOCK]).response(reply(message)))["output"]
+    again = request(tools=[PATCH, CLOCK], input=[USER, *served]).chat_request()
+    assert again.messages[1] == message
 
 
 def test_codexs_requests_become_chat_requests():
@@ -178,6 +274,24 @@ def test_response_carries_text_and_calls_with_their_ids():
     assert output[0].content[0].text == "ok" and output[1].call_id == "c1"
 
 
+def test_response_gives_a_custom_tools_call_its_input():
+    (item,) = request(tools=[PATCH]).response(reply({"role": "assistant", "tool_calls": [PATCH_CALL]})).output
+    assert (item.type, item.call_id, item.name, item.input) == ("custom_tool_call", "c1", "apply_patch", "p")
+
+
+@pytest.mark.parametrize("arguments", ['{"input": "p", "x": 1}', '{"input": 1}', "<tool_call>apply_patch</tool_call>"])
+def test_response_gives_a_custom_tools_other_arguments_as_written(arguments):
+    call = {**PATCH_CALL, "function": {"name": "apply_patch", "arguments": arguments}}
+    (item,) = request(tools=[PATCH]).response(reply({"role": "assistant", "tool_calls": [call]})).output
+    assert item.input == arguments
+
+
+def test_response_gives_a_namespaced_call_its_namespace():
+    call = {**CALL, "function": {"name": "clock.sleep", "arguments": "{}"}}
+    (item,) = request(tools=[CLOCK]).response(reply({"role": "assistant", "tool_calls": [call]})).output
+    assert (item.type, item.namespace, item.name) == ("function_call", "clock", "sleep")
+
+
 def test_response_with_neither_text_nor_calls_is_an_empty_message():
     (item,) = request().response(reply({"role": "assistant", "content": None})).output
     assert item.type == "message" and item.content[0].text == ""
@@ -237,18 +351,36 @@ def test_a_reasoning_item_without_its_raw_text_is_refused():
 
 
 def test_an_undeclared_key_in_a_tool_is_refused_by_name():
-    with pytest.raises(ValidationError, match="tools.0.output_schema"):
+    with pytest.raises(ValidationError, match="tools.0.function.output_schema"):
         request(tools=[{**TOOL, "output_schema": {}}])
 
 
-def test_a_tool_other_than_a_function_is_refused():
-    with pytest.raises(ValidationError, match="tools.0.type"):
+def test_a_tool_of_another_type_is_refused():
+    with pytest.raises(ValidationError, match="tools.0\n.*'web_search'"):
         request(tools=[{"type": "web_search"}])
 
 
 def test_an_item_of_another_type_is_refused():
-    with pytest.raises(ValidationError, match="custom_tool_call"):
-        request(input=[{"type": "custom_tool_call", "call_id": "c1", "name": "f", "input": ""}])
+    with pytest.raises(ValidationError, match="web_search_call"):
+        request(input=[{"type": "web_search_call", "id": "ws_1", "status": "completed"}])
+
+
+def test_an_undeclared_key_in_an_item_is_refused_by_name():
+    with pytest.raises(ValidationError, match="input.0.message.encrypted_content"):
+        request(input=[{**USER, "encrypted_content": "e"}])
+
+
+def test_a_custom_tool_call_in_a_namespace_is_refused():
+    call = {"type": "custom_tool_call", "call_id": "c1", "namespace": "n", "name": "apply_patch", "input": "p"}
+    with pytest.raises(ValidationError, match="input.1.custom_tool_call.namespace\n.*not served in a namespace"):
+        request(input=[USER, call])
+
+
+def test_a_name_two_tools_are_served_under_is_refused_at_the_second():
+    with pytest.raises(ValidationError) as e:
+        request(tools=[{**TOOL, "name": "clock.sleep"}, CLOCK])
+    (error,) = e.value.errors()
+    assert error["loc"] == ("tools", 1, "namespace", "tools", 0, "name") and "an earlier tool" in error["msg"]
 
 
 def test_parallel_tool_calls_false_with_tools_is_refused():
@@ -268,7 +400,7 @@ def test_a_value_not_served_is_refused_at_its_key(key, value):
 def test_a_tool_without_a_name_is_refused_at_it():
     with pytest.raises(ValidationError) as e:
         request(tools=[{"type": "function"}])
-    assert [err["loc"] for err in e.value.errors()] == [("tools", 0, "name")]
+    assert [err["loc"] for err in e.value.errors()] == [("tools", 0, "function", "name")]
 
 
 def test_chats_refusal_of_the_translation_is_a_bug(monkeypatch):

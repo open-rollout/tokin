@@ -29,32 +29,45 @@ from .request import HarnessRequest
 _IN_PROGRESS = {"object": "response", "status": "in_progress"}
 
 
-class TextPart(BaseModel):
+# Items and parts refuse keys they do not declare. Those an item is served with come back and are read by nothing:
+# no template renders them, and reasoning continues by its raw text.
+class TextPart(BaseModel, extra="forbid"):
     type: Literal["input_text", "output_text"]
     text: str
+    annotations: list[dict[str, Any]] | None = None
+    logprobs: list[dict[str, Any]] | None = None
 
 
 # Templates render a message's content as a string, so parts are read as their text joined.
 type Text = Annotated[
     str | list[TextPart], AfterValidator(lambda c: c if isinstance(c, str) else "".join(p.text for p in c))
 ]
+type Status = Literal["in_progress", "completed", "incomplete"]
 
 
-# Items ignore keys they do not declare, such as the `id` and `status` they were served with: no template reads them.
-class MessageItem(BaseModel):
+class ServedItem(BaseModel, extra="forbid"):
+    id: str | None = None
+
+
+class MessageItem(ServedItem):
     type: Literal["message"]
     role: Literal["user", "assistant", "system", "developer"]
     content: Text
+    status: Status | None = None
+    phase: Literal["commentary", "final_answer"] | None = None
 
 
-class ReasoningText(BaseModel):
+class ReasoningText(BaseModel, extra="forbid"):
     type: Literal["reasoning_text"]
     text: str
 
 
-class ReasoningItem(BaseModel):
+class ReasoningItem(ServedItem):
     type: Literal["reasoning"]
     content: list[ReasoningText] | None = None
+    summary: list[dict[str, Any]] | None = None
+    encrypted_content: str | None = None
+    status: Status | None = None
 
     @model_validator(mode="after")
     def has_raw_text(self) -> Self:
@@ -66,21 +79,53 @@ class ReasoningItem(BaseModel):
         return self
 
 
-class FunctionCallItem(BaseModel):
+class FunctionCallItem(ServedItem):
     type: Literal["function_call"]
     call_id: str
     name: str
+    namespace: str | None = None
     arguments: str
+    status: Status | None = None
+    # Null only, as a response not streamed serves it: every call tokin serves is the model's own.
+    caller: None = None
 
 
-class FunctionCallOutputItem(BaseModel):
+class FunctionCallOutputItem(ServedItem):
     type: Literal["function_call_output"]
     call_id: str
     output: Text
 
 
+class CustomToolCallItem(ServedItem):
+    type: Literal["custom_tool_call"]
+    call_id: str
+    name: str
+    namespace: str | None = None
+    input: str
+    caller: None = None
+
+    @field_validator("namespace")
+    @classmethod
+    def no_namespace(cls, value: str | None) -> str | None:
+        if value is not None:
+            raise ValueError("a custom tool is not served in a namespace: a namespace's tools are served as functions")
+        return value
+
+
+class CustomToolCallOutputItem(ServedItem):
+    type: Literal["custom_tool_call_output"]
+    call_id: str
+    output: Text
+
+
 type Item = Annotated[
-    MessageItem | ReasoningItem | FunctionCallItem | FunctionCallOutputItem, Field(discriminator="type")
+    MessageItem
+    | ReasoningItem
+    | FunctionCallItem
+    | FunctionCallOutputItem
+    | CustomToolCallItem
+    | CustomToolCallOutputItem,
+    Field(discriminator="type"),
 ]
 
 
@@ -93,6 +138,41 @@ class FunctionTool(TypedDict):
     description: NotRequired[str | None]
     parameters: NotRequired[dict[str, Any] | None]
     strict: NotRequired[bool | None]
+
+
+@with_config(ConfigDict(extra="forbid"))
+class TextFormat(TypedDict):
+    type: Literal["text"]
+
+
+@with_config(ConfigDict(extra="forbid"))
+class GrammarFormat(TypedDict):
+    type: Literal["grammar"]
+    syntax: Literal["lark", "regex"]
+    definition: str
+
+
+@with_config(ConfigDict(extra="forbid"))
+class CustomTool(TypedDict):
+    """A tool called with free text, which `format` describes."""
+
+    type: Literal["custom"]
+    name: str
+    description: NotRequired[str]
+    format: NotRequired[Annotated[TextFormat | GrammarFormat, Field(discriminator="type")]]
+
+
+@with_config(ConfigDict(extra="forbid"))
+class NamespaceTool(TypedDict):
+    """Functions grouped under `name`, which a call to one of them carries as its `namespace`."""
+
+    type: Literal["namespace"]
+    name: str
+    description: str
+    tools: list[FunctionTool]
+
+
+type Tool = Annotated[FunctionTool | CustomTool | NamespaceTool, Field(discriminator="type")]
 
 
 class Reasoning(BaseModel, extra="forbid"):
@@ -111,7 +191,7 @@ class OpenAIResponsesRequest(HarnessRequest, extra="forbid"):
 
     model: str
     input: list[Item]
-    tools: list[FunctionTool] | None = None
+    tools: list[Tool] | None = None
     tool_choice: Literal["auto"] | None = None
     store: Literal[False] | None = None
     temperature: float | None = None
@@ -127,11 +207,37 @@ class OpenAIResponsesRequest(HarnessRequest, extra="forbid"):
 
     _chat: OpenAIChatRequest = PrivateAttr()
 
+    @staticmethod
+    def _flatten(tools: list[Tool]) -> dict[str, tuple[NamespaceTool | None, FunctionTool | CustomTool]]:
+        """Each tool by the name chat serves it under, with its namespace; a namespace's functions are `namespace.name`.
+
+        A name served twice is refused at the second, since a chat call names its tool alone. OpenAI's names hold only
+        letters, digits, `_` and `-`, so only a name OpenAI refuses can collide with a namespaced one.
+        """
+        flat: dict[str, tuple[NamespaceTool | None, FunctionTool | CustomTool]] = {}
+        for i, tool in enumerate(tools):
+            members: list[tuple[NamespaceTool | None, FunctionTool | CustomTool, tuple[int | str, ...]]]
+            if tool["type"] == "namespace":
+                members = [(tool, f, (i, "namespace", "tools", j)) for j, f in enumerate(tool["tools"])]
+            else:
+                members = [(None, tool, (i, tool["type"]))]
+            for namespace, member, loc in members:
+                name = member["name"] if namespace is None else f"{namespace['name']}.{member['name']}"
+                if name in flat:
+                    error = ValueError(f"`{name}` is the name of an earlier tool too: a chat call names its tool alone")
+                    raise ValidationError.from_exception_data(
+                        "tools",
+                        [{"type": "value_error", "loc": (*loc, "name"), "input": name, "ctx": {"error": error}}],
+                    )
+                flat[name] = (namespace, member)
+        return flat
+
     @field_validator("tools", mode="wrap")
     @classmethod
     def validate_tools(cls, value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
         """Validated, but kept as sent, so that chat's tools keep the order sent, which templates print."""
         handler(value)
+        cls._flatten(value or [])
         return value
 
     @field_validator("parallel_tool_calls")
@@ -165,25 +271,43 @@ class OpenAIResponsesRequest(HarnessRequest, extra="forbid"):
                 case ReasoningItem():
                     text = "".join(part.text for part in item.content or [])
                     messages.append({"role": "assistant", "content": None, "reasoning_content": text})
-                case FunctionCallItem():
+                case FunctionCallItem() | CustomToolCallItem():
                     if reply is None:
                         messages.append(reply := {"role": "assistant", "content": None})
-                    function = {"name": item.name, "arguments": item.arguments}
+                    function: dict[str, str]
+                    if isinstance(item, CustomToolCallItem):
+                        function = {"name": item.name, "arguments": json.dumps({"input": item.input})}
+                    else:
+                        name = item.name if item.namespace is None else f"{item.namespace}.{item.name}"
+                        function = {"name": name, "arguments": item.arguments}
                     reply.setdefault("tool_calls", []).append(
                         {"id": item.call_id, "type": "function", "function": function}
                     )
-                case FunctionCallOutputItem():
+                case FunctionCallOutputItem() | CustomToolCallOutputItem():
                     messages.append({"role": "tool", "tool_call_id": item.call_id, "content": item.output})
         if system:
             messages.insert(0, {"role": "system", "content": "\n\n".join(system)})
         chat = self.model_dump(include={"model", "tool_choice", "store", "temperature", "top_p"}, exclude_unset=True)
         chat["messages"] = messages
         if self.tools is not None:
-            # Chat takes no null `description` or `parameters`: a null there is the key left out.
-            chat["tools"] = [
-                {"type": "function", "function": {k: v for k, v in tool.items() if k != "type" and v is not None}}
-                for tool in self.tools
-            ]
+            chat["tools"] = []
+            for name, (namespace, tool) in self._flatten(self.tools).items():
+                schema: dict[str, Any]
+                if tool["type"] == "custom":
+                    parameter: dict[str, Any] = {"type": "string"}
+                    # A grammar is shown to the model, not enforced: generation is unconstrained.
+                    if (form := tool.get("format")) and form["type"] == "grammar":
+                        parameter["description"] = f"Must match this {form['syntax']} grammar:\n{form['definition']}"
+                    schema = {k: v for k, v in tool.items() if k in ("name", "description")}
+                    schema["parameters"] = {"type": "object", "properties": {"input": parameter}, "required": ["input"]}
+                else:
+                    # Chat takes no null `description` or `parameters`: a null there is the key left out.
+                    schema = {k: v for k, v in tool.items() if k != "type" and v is not None} | {"name": name}
+                    # Chat has no namespace to describe, so its description opens each of its functions'.
+                    if namespace and namespace["description"]:
+                        described = (namespace["description"], tool.get("description"))
+                        schema["description"] = "\n\n".join(filter(None, described))
+                chat["tools"].append({"type": "function", "function": schema})
         if "max_output_tokens" in self.model_fields_set:
             chat["max_completion_tokens"] = self.max_output_tokens
         # Without tools it constrains nothing, and Codex's compaction sends `false` with `tools: []`.
@@ -244,11 +368,26 @@ class OpenAIResponsesRequest(HarnessRequest, extra="forbid"):
                     "content": [text],
                 }
             )
+        tools = self._flatten(self.tools or [])
         for call in calls:
             function = cast(ChatCompletionMessageFunctionToolCall, call).function
-            output.append(
-                {"type": "function_call", "call_id": call.id, "name": function.name, "arguments": function.arguments}
-            )
+            match tools.get(function.name):
+                case (_, {"type": "custom"}):
+                    try:
+                        given = json.loads(function.arguments)
+                    except ValueError:
+                        given = None
+                    # Arguments not `{"input": <text>}` go as read, a block unread as its text, as a function's do.
+                    if not (isinstance(given, dict) and given.keys() == {"input"} and isinstance(given["input"], str)):
+                        given = {"input": function.arguments}
+                    output.append({"type": "custom_tool_call", "call_id": call.id, "name": function.name, **given})
+                    continue
+                case ({"name": namespace}, {"name": name}):
+                    # Codex routes a call by its namespace and the name within it.
+                    named = {"namespace": namespace, "name": name}
+                case _:
+                    named = {"name": function.name}
+            output.append({"type": "function_call", "call_id": call.id, **named, "arguments": function.arguments})
         return Response.construct(
             id=f"resp_{completion.id}",
             object="response",
