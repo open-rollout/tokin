@@ -37,6 +37,11 @@ async def test_a_session_serves_chat_completions(serve):
     assert completion.choices[0].message.content == "ok" and completion.choices[0].finish_reason == "stop"
 
 
+async def test_a_session_serves_responses(serve):
+    response = await (await harness(serve(said("ok")))).responses.create(model="m", input=[{"type": "message", **USER}])
+    assert response.id.startswith("resp_") and response.output_text == "ok"
+
+
 async def test_an_unknown_session_is_404(serve):
     with pytest.raises(NotFoundError, match="no session 'nope'"):
         await (await harness(serve(), "nope")).chat.completions.create(model="m", messages=[USER])
@@ -186,6 +191,42 @@ class TestStream:
     async def test_sends_usage_when_asked(self, serve):
         *_, last = await self.stream(serve, said("ok"), stream_options={"include_usage": True})
         assert last.choices == [] and last.usage.completion_tokens == 3
+
+
+class TestResponsesStream:
+    async def test_carries_the_whole_reply(self, serve):
+        client = await harness(serve(said("<think>hm</think>ok")))
+        async with client.responses.stream(model="m", input=[{"type": "message", **USER}]) as stream:
+            kinds = [event.type async for event in stream]
+            response = await stream.get_final_response()
+        assert kinds[0] == "response.created" and kinds[-1] == "response.completed"
+        assert [item.type for item in response.output] == ["reasoning", "message"] and response.output_text == "ok"
+
+    async def test_sends_keep_alives_while_generating(self, gateway):
+        server = Server(g := gateway(), keepalive=0.01)
+
+        async def generate(token_ids, params):
+            await asyncio.sleep(0.05)
+            return said("ok")
+
+        g.engine.generate = generate
+        client = await harness(over(server))
+        async with client.responses.stream(model="m", input=[{"type": "message", **USER}]) as stream:
+            kinds = [event.type async for event in stream]
+        assert kinds[:2] == ["response.created", "response.in_progress"] and kinds[-1] == "response.completed"
+
+    async def test_carries_a_failure_while_generating_as_failed(self, gateway):
+        server = Server(g := gateway(), keepalive=0.01)
+
+        async def generate(token_ids, params):
+            await asyncio.sleep(0.05)
+            raise InferenceEngineError("the engine went away")
+
+        g.engine.generate = generate
+        client = await harness(over(server))
+        async with client.responses.stream(model="m", input=[{"type": "message", **USER}]) as stream:
+            *_, last = [event async for event in stream]
+        assert last.type == "response.failed" and last.response.error.message == "the engine went away"
 
 
 async def test_a_session_runs_its_turns_with_the_params_it_was_opened_with(gateway):

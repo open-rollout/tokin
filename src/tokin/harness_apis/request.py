@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from http import HTTPStatus
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel
 
@@ -10,10 +10,20 @@ from ..gateway import ChatRequest, ChatResponse
 
 
 class HarnessRequest(BaseModel, ABC):
-    """A harness's request in one wire API, and the way back to that API's response."""
+    """A harness's request in one wire API, and the way back to that API's response.
+
+    `path` is where a session serves the API, under its base URL.
+    """
+
+    path: ClassVar[str]
+    stream: bool = False
 
     @abstractmethod
     def chat_request(self) -> ChatRequest: ...
+
+    @abstractmethod
+    def start_events(self) -> list[str]:
+        """What a stream opens with, before any keep-alive: OpenAI's SDK refuses a Responses stream not opened so."""
 
     @abstractmethod
     def keepalive_event(self) -> str:

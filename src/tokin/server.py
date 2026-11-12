@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import cast
@@ -10,13 +10,12 @@ from typing import cast
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
-from openai.types.chat import ChatCompletion
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_core import InitErrorDetails
 
 from .chat_templates import ChatTemplateError
 from .gateway import ChatResponse, Gateway, GatewayError
-from .harness_apis import HarnessRequest, OpenAIChatRequest
+from .harness_apis import HARNESS_APIS, HarnessRequest, OpenAIChatRequest
 from .inference_engines import InferenceEngineError
 from .rollout import GenerationParams
 from .session import Session
@@ -36,10 +35,10 @@ class SessionRequest(BaseModel, extra="forbid"):
 
 
 class Server:
-    """The gateway over HTTP: `POST /sessions` opens a session, serving OpenAI's chat completions at its own base URL.
+    """The gateway over HTTP: `POST /sessions` opens a session, serving OpenAI's chat and responses at its base URL.
 
     `app` is the ASGI application. Startup waits up to `ready_timeout` seconds for the engine to generate; a stream
-    still generating sends a keep-alive comment every `keepalive` seconds.
+    still generating sends its API's keep-alive every `keepalive` seconds.
     """
 
     def __init__(self, gateway: Gateway, *, ready_timeout: float = 1800, keepalive: float = 30) -> None:
@@ -50,12 +49,9 @@ class Server:
         self.app = FastAPI(lifespan=self.lifespan)
         self.app.add_api_route("/health", self.health, methods=["GET"])
         self.app.add_api_route("/sessions", self.create_session, methods=["POST"], status_code=HTTPStatus.CREATED)
-        self.app.add_api_route(
-            "/sessions/{sid}/v1/chat/completions",
-            self.chat_completions,
-            methods=["POST"],
-            response_model=ChatCompletion,
-        )
+        self.apis = {f"/sessions/{{sid}}/v1{api.path}": api for api in HARNESS_APIS}
+        for path, api in self.apis.items():
+            self.app.add_api_route(path, self.endpoint(api), methods=["POST"], response_model=None)
         self.app.add_api_route("/sessions/{sid}", self.get_session, methods=["GET"], response_class=Response)
         self.app.add_api_route(
             "/sessions/{sid}", self.delete_session, methods=["DELETE"], status_code=HTTPStatus.NO_CONTENT
@@ -109,22 +105,26 @@ class Server:
         return status
 
     async def refuse(self, http: Request, exc: Exception) -> JSONResponse:
+        # A refusal answers in its route's API; a route of none, such as `/sessions`, in chat's.
+        api = self.apis.get(getattr(http.scope.get("route"), "path", ""), OpenAIChatRequest)
         if isinstance(exc, RequestValidationError):
             # FastAPI locates body errors under `body`, and the body is the harness's whole request.
             errors = [{**e, "loc": e["loc"][1:]} for e in exc.errors()]
-            exc = ValidationError.from_exception_data("OpenAIChatRequest", cast(list[InitErrorDetails], errors))
+            exc = ValidationError.from_exception_data(api.__name__, cast(list[InitErrorDetails], errors))
         status = self._status(http, exc)
-        return JSONResponse(OpenAIChatRequest.error(exc, status), status)
+        return JSONResponse(api.error(exc, status), status)
 
     async def _stream(
         self, turn: asyncio.Future[ChatResponse], request: HarnessRequest, http: Request
     ) -> AsyncIterator[str]:
-        """The events of a turn still generating: keep-alives until it ends, then its reply or its error.
+        """The events of a turn still generating: its API's opening, keep-alives until it ends, then its reply or error.
 
         Its headers are sent already, so an error reaches the harness as its API's error events, not a status. A
         harness hanging up cancels this stream, and the turn with it.
         """
         try:
+            for event in request.start_events():
+                yield event
             while not turn.done():
                 await asyncio.wait({turn}, timeout=self.keepalive)
                 if not turn.done():
@@ -140,12 +140,12 @@ class Server:
         finally:
             turn.cancel()
 
-    async def chat_completions(self, sid: str, request: OpenAIChatRequest, http: Request) -> ChatCompletion | Response:
-        """The turn's completion, as one response or, when asked, a stream.
+    async def serve(self, sid: str, request: HarnessRequest, http: Request) -> BaseModel | Response:
+        """The turn's response in the request's API, as one response or, when asked, a stream.
 
         A harness hanging up first cancels the turn; the 499 sent back is never read. A stream opens once the turn
-        starts generating and sends keep-alive comments until it is done: clients time out waiting for a response's
-        headers or on a silent stream (OpenAI's SDKs at 600 s, opencode at 300 s), and a generation can run longer.
+        starts generating and sends keep-alives until it is done: clients time out waiting for a response's headers
+        or on a silent stream (OpenAI's SDKs at 600 s, opencode and Codex at 300 s), and a generation can run longer.
         """
 
         async def hung_up() -> None:
@@ -169,5 +169,15 @@ class Server:
         # The turn ended before any reply was sent, so a refusal raises here and keeps its status.
         reply = turn.result()
         if request.stream:
-            return StreamingResponse(request.response_events(reply), media_type="text/event-stream")
+            events = [*request.start_events(), *request.response_events(reply)]
+            return StreamingResponse(events, media_type="text/event-stream")
         return request.response(reply)
+
+    def endpoint(self, api: type[HarnessRequest]) -> Callable[..., Awaitable[BaseModel | Response]]:
+        """`serve` for one API's route; FastAPI parses the body as the type its parameter is annotated with."""
+
+        async def endpoint(sid: str, request: HarnessRequest, http: Request) -> BaseModel | Response:
+            return await self.serve(sid, request, http)
+
+        endpoint.__annotations__["request"] = api
+        return endpoint
