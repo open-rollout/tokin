@@ -10,6 +10,7 @@ from tokin.chat_templates.glm45 import GLM45ChatTemplate
 from tokin.chat_templates.qwen25 import Qwen25ChatTemplate
 from tokin.chat_templates.qwen35 import Qwen35ChatTemplate
 from tokin.chat_templates.qwen38 import Qwen38ChatTemplate
+from tokin.harness_apis import OpenAIResponsesRequest
 from tokin.rollout import FinishReason, Generation
 
 TOOLS = [
@@ -40,6 +41,19 @@ def user(content):
     return {"role": "user", "content": content}
 
 
+# The user message a Responses developer message becomes once the conversation has begun.
+DEVELOPER = (
+    OpenAIResponsesRequest.model_validate(
+        {
+            "model": "m",
+            "input": [{"type": "message", **USER}, {"type": "message", "role": "developer", "content": "Be brief."}],
+        }
+    )
+    .chat_request()
+    .messages[-1]
+)
+
+
 # history, new messages, tools, the calls the results answer
 SCENARIOS = {
     **{f"user:{c!r}": ([SYSTEM, USER, REPLY], [user(c)], None, None) for c in CONTENTS},
@@ -55,6 +69,7 @@ SCENARIOS = {
         TOOLS,
         None,
     ),
+    "developer,user": ([SYSTEM, USER, REPLY], [DEVELOPER, user("Merci?")], None, None),
     "system,user": (
         [SYSTEM, USER, REPLY],
         [{"role": "system", "content": "Answer in French."}, user("Merci?")],
