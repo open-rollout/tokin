@@ -2,13 +2,24 @@ from __future__ import annotations
 
 import json
 from http import HTTPStatus
-from typing import Annotated, Any, Literal, Self, cast
+from typing import Annotated, Any, Literal, NotRequired, Self, TypedDict, cast
 
 from openai.types.chat import ChatCompletionMessageFunctionToolCall
 from openai.types.completion_usage import CompletionUsage
 from openai.types.responses import Response
-from pydantic import AfterValidator, BaseModel, Field, PrivateAttr, ValidationError, model_validator
-from pydantic_core import InitErrorDetails
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    ValidationError,
+    ValidationInfo,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+    model_validator,
+    with_config,
+)
 
 from ..gateway import ChatRequest, ChatResponse, ContextLengthExceededError
 from .openai_chat import OpenAIChatRequest
@@ -73,10 +84,15 @@ type Item = Annotated[
 ]
 
 
-class FunctionTool(BaseModel, extra="allow"):
-    """A function tool; its other keys are chat's function definition, which chat validates."""
+@with_config(ConfigDict(extra="forbid"))
+class FunctionTool(TypedDict):
+    """Chat's function definition, its keys at the tool's top level."""
 
     type: Literal["function"]
+    name: str
+    description: NotRequired[str | None]
+    parameters: NotRequired[dict[str, Any] | None]
+    strict: NotRequired[bool | None]
 
 
 class Reasoning(BaseModel, extra="forbid"):
@@ -86,22 +102,22 @@ class Reasoning(BaseModel, extra="forbid"):
 class OpenAIResponsesRequest(HarnessRequest, extra="forbid"):
     """The harness's `/v1/responses` body, served as the chat request it translates to.
 
-    Undeclared keys are refused by name. Keys chat also takes are passed to it unchecked, and chat's refusals are
-    located by this body's keys. Leading system and developer messages become one system message: Qwen templates
+    Undeclared keys are refused by name, and each declared one takes only the values `tokin` serves, so a refusal is
+    located at this body's keys. Leading system and developer messages become one system message: Qwen templates
     refuse a `developer` role and a second system message.
     """
 
     path = "/responses"
 
-    model: Any = None
+    model: str
     input: list[Item]
     tools: list[FunctionTool] | None = None
-    tool_choice: Any = None
-    store: Any = None
-    temperature: Any = None
-    top_p: Any = None
-    max_output_tokens: Any = None
-    parallel_tool_calls: Any = None
+    tool_choice: Literal["auto"] | None = None
+    store: Literal[False] | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    max_output_tokens: int | None = Field(None, ge=1)
+    parallel_tool_calls: bool | None = None
     reasoning: Reasoning | None = None
 
     # Sent by Codex and read by nothing: none changes the turn, and reasoning comes back as raw text, not encrypted.
@@ -111,9 +127,29 @@ class OpenAIResponsesRequest(HarnessRequest, extra="forbid"):
 
     _chat: OpenAIChatRequest = PrivateAttr()
 
+    @field_validator("tools", mode="wrap")
+    @classmethod
+    def validate_tools(cls, value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
+        """Validated, but kept as sent, so that chat's tools keep the order sent, which templates print."""
+        handler(value)
+        return value
+
+    @field_validator("parallel_tool_calls")
+    @classmethod
+    def no_false_with_tools(cls, value: bool | None, info: ValidationInfo) -> bool | None:
+        if value is False and info.data.get("tools"):
+            raise ValueError(
+                "`false` is not served with tools: generation is unconstrained, so a turn may make several calls"
+            )
+        return value
+
     @model_validator(mode="after")
     def translate(self) -> Self:
-        """The chat request is built in validation, so that its refusals are this body's, with status 400."""
+        """Map this body onto its chat request, which chat validates as a check: refusing a valid body is a bug.
+
+        The bug is raised as a `RuntimeError`, which `pydantic` passes on uncaught, so it is answered with 500: a 400
+        would ask the harness to fix a body that is fine.
+        """
         system: list[str] = []
         messages: list[dict[str, Any]] = []
         # A turn's items come in the order `response` gives them: reasoning, then text, then calls, all one reply.
@@ -143,7 +179,11 @@ class OpenAIResponsesRequest(HarnessRequest, extra="forbid"):
         chat = self.model_dump(include={"model", "tool_choice", "store", "temperature", "top_p"}, exclude_unset=True)
         chat["messages"] = messages
         if self.tools is not None:
-            chat["tools"] = [{"type": "function", "function": tool.model_extra} for tool in self.tools]
+            # Chat takes no null `description` or `parameters`: a null there is the key left out.
+            chat["tools"] = [
+                {"type": "function", "function": {k: v for k, v in tool.items() if k != "type" and v is not None}}
+                for tool in self.tools
+            ]
         if "max_output_tokens" in self.model_fields_set:
             chat["max_completion_tokens"] = self.max_output_tokens
         # Without tools it constrains nothing, and Codex's compaction sends `false` with `tools: []`.
@@ -152,14 +192,7 @@ class OpenAIResponsesRequest(HarnessRequest, extra="forbid"):
         try:
             self._chat = OpenAIChatRequest.model_validate(chat)
         except ValidationError as e:
-            errors = e.errors()
-            for err in errors:
-                match err["loc"]:
-                    case ("max_completion_tokens", *rest):
-                        err["loc"] = ("max_output_tokens", *rest)
-                    case ("tools", i, "function", *rest):
-                        err["loc"] = ("tools", i, *rest)
-            raise ValidationError.from_exception_data(e.title, cast(list[InitErrorDetails], errors)) from e
+            raise RuntimeError(f"a bug in tokin: chat refuses the chat request this valid body maps to: {e}") from e
         return self
 
     @staticmethod

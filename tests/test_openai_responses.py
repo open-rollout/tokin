@@ -7,7 +7,7 @@ from openai.types.responses.response_create_params import ResponseCreateParamsSt
 from pydantic import ValidationError
 
 from tokin.gateway import ChatResponse, ContextLengthExceededError
-from tokin.harness_apis import OpenAIResponsesRequest
+from tokin.harness_apis import OpenAIChatRequest, OpenAIResponsesRequest
 from tokin.rollout import FinishReason, Generation
 from tokin.session import Session
 
@@ -37,7 +37,7 @@ UNSERVED = {
 EXTRA = {"client_metadata"}
 
 USER = {"type": "message", "role": "user", "content": "hi"}
-TOOL = {"type": "function", "name": "f", "description": "d", "parameters": {"type": "object"}, "strict": False}
+TOOL = {"type": "function", "name": "f", "description": "d", "strict": False, "parameters": {"type": "object"}}
 CALL = {"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
 
 
@@ -72,6 +72,11 @@ def test_parallel_tool_calls_without_tools_is_dropped():
 def test_tools_become_chat_functions_in_the_order_sent():
     (tool,) = request(tools=[TOOL]).chat_request().tools
     assert list(tool) == ["type", "function"] and list(tool["function"]) == list(TOOL)[1:]
+
+
+def test_a_tools_nulls_are_left_out_of_its_function():
+    (tool,) = request(tools=[{**TOOL, "description": None, "parameters": None}]).chat_request().tools
+    assert tool["function"] == {"name": "f", "strict": False}
 
 
 def test_leading_system_and_developer_messages_become_one_system_message():
@@ -231,6 +236,11 @@ def test_a_reasoning_item_without_its_raw_text_is_refused():
         request(input=[USER, {"type": "reasoning", "summary": [], "encrypted_content": "x"}])
 
 
+def test_an_undeclared_key_in_a_tool_is_refused_by_name():
+    with pytest.raises(ValidationError, match="tools.0.output_schema"):
+        request(tools=[{**TOOL, "output_schema": {}}])
+
+
 def test_a_tool_other_than_a_function_is_refused():
     with pytest.raises(ValidationError, match="tools.0.type"):
         request(tools=[{"type": "web_search"}])
@@ -242,16 +252,27 @@ def test_an_item_of_another_type_is_refused():
 
 
 def test_parallel_tool_calls_false_with_tools_is_refused():
-    with pytest.raises(ValidationError, match="parallel_tool_calls"):
+    with pytest.raises(ValidationError, match="parallel_tool_calls\n.*not served with tools"):
         request(tools=[TOOL], parallel_tool_calls=False)
 
 
-def test_chats_refusal_of_max_output_tokens_names_it():
-    with pytest.raises(ValidationError, match="max_output_tokens"):
-        request(max_output_tokens=0)
+@pytest.mark.parametrize(
+    ("key", "value"), [("store", True), ("tool_choice", "required"), ("max_output_tokens", 0), ("model", None)]
+)
+def test_a_value_not_served_is_refused_at_its_key(key, value):
+    with pytest.raises(ValidationError) as e:
+        request(**{key: value})
+    assert [err["loc"] for err in e.value.errors()] == [(key,)]
 
 
-def test_chats_refusal_of_a_tool_is_located_in_it():
+def test_a_tool_without_a_name_is_refused_at_it():
     with pytest.raises(ValidationError) as e:
         request(tools=[{"type": "function"}])
-    assert e.value.errors()[0]["loc"] == ("tools", 0, "name")
+    assert [err["loc"] for err in e.value.errors()] == [("tools", 0, "name")]
+
+
+def test_chats_refusal_of_the_translation_is_a_bug(monkeypatch):
+    validate = OpenAIChatRequest.model_validate
+    monkeypatch.setattr(OpenAIChatRequest, "model_validate", lambda chat: validate({}))
+    with pytest.raises(RuntimeError, match="a bug in tokin"):
+        request()
