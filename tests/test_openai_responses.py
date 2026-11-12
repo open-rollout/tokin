@@ -148,6 +148,14 @@ def test_leading_system_and_developer_messages_become_one_system_message():
     ]
 
 
+@pytest.mark.parametrize("role", ["developer", "system"])
+def test_a_later_developer_or_system_message_is_a_user_message_tagged_with_its_role(role):
+    later = {"type": "message", "role": role, "content": "b"}
+    assert request(input=[USER, later]).chat_request().messages[1:] == [
+        {"role": "user", "content": f"<{role}_message>\nb\n</{role}_message>"}
+    ]
+
+
 def test_text_parts_are_joined():
     parts = [{"type": "input_text", "text": "h"}, {"type": "input_text", "text": "i"}]
     assert request(input=[{**USER, "content": parts}]).chat_request().messages == [{"role": "user", "content": "hi"}]
@@ -356,13 +364,34 @@ def test_an_undeclared_key_in_a_tool_is_refused_by_name():
 
 
 def test_a_tool_of_another_type_is_refused():
-    with pytest.raises(ValidationError, match="tools.0\n.*'web_search'"):
+    with pytest.raises(ValidationError, match="tools.0\n  Value error, `web_search` is not served: tokin runs no tool"):
         request(tools=[{"type": "web_search"}])
 
 
 def test_an_item_of_another_type_is_refused():
-    with pytest.raises(ValidationError, match="web_search_call"):
-        request(input=[{"type": "web_search_call", "id": "ws_1", "status": "completed"}])
+    with pytest.raises(
+        ValidationError, match="input.1\n  Value error, `web_search_call` is not served: tokin runs no tool"
+    ):
+        request(input=[USER, {"type": "web_search_call", "id": "ws_1", "status": "completed"}])
+
+
+IMAGE = {"type": "input_image", "image_url": "data:image/png;base64,", "detail": "auto"}
+
+
+@pytest.mark.parametrize(
+    ("item", "loc"),
+    [
+        ({**USER, "content": [IMAGE]}, "message.content.0"),
+        ({**USER, "content": [{"type": "input_file", "file_id": "f"}]}, "message.content.0"),
+        ({"type": "function_call_output", "call_id": "c1", "output": [IMAGE]}, "function_call_output.output.0"),
+    ],
+    ids=["image", "file", "image output"],
+)
+def test_a_part_other_than_text_is_refused(item, loc):
+    with pytest.raises(
+        ValidationError, match=f"input.1.{loc}\n  Value error, `input_.*` is not served: .*images are not supported yet"
+    ):
+        request(input=[USER, item])
 
 
 def test_an_undeclared_key_in_an_item_is_refused_by_name():

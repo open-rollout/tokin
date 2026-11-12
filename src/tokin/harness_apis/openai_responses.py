@@ -10,12 +10,14 @@ from openai.types.responses import Response
 from pydantic import (
     AfterValidator,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     PrivateAttr,
     ValidationError,
     ValidationInfo,
     ValidatorFunctionWrapHandler,
+    WrapValidator,
     field_validator,
     model_validator,
     with_config,
@@ -29,6 +31,21 @@ from .request import HarnessRequest
 _IN_PROGRESS = {"object": "response", "status": "in_progress"}
 
 
+def served(reason: str) -> WrapValidator:
+    """A union's refusal of a `type` it does not serve, by `reason`, which can name `{tag}` and `{expected_tags}`."""
+
+    def refuse(value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
+        try:
+            return handler(value)
+        except ValidationError as e:
+            match e.errors():
+                case [{"type": "union_tag_invalid", "loc": (), "ctx": ctx}]:
+                    raise ValueError(reason.format(**ctx)) from None
+            raise
+
+    return WrapValidator(refuse)
+
+
 # Items and parts refuse keys they do not declare. Those an item is served with come back and are read by nothing:
 # no template renders them, and reasoning continues by its raw text.
 class TextPart(BaseModel, extra="forbid"):
@@ -38,9 +55,17 @@ class TextPart(BaseModel, extra="forbid"):
     logprobs: list[dict[str, Any]] | None = None
 
 
-# Templates render a message's content as a string, so parts are read as their text joined.
+# A discriminator on one model makes its `type` a tag, refused as a union's is.
+type Part = Annotated[
+    TextPart,
+    Field(discriminator="type"),
+    served("`{tag}` is not served: content is served as text, of types {expected_tags}; images are not supported yet"),
+]
+# Templates render a message's content as a string, so a string is its one text part, and parts are read joined.
 type Text = Annotated[
-    str | list[TextPart], AfterValidator(lambda c: c if isinstance(c, str) else "".join(p.text for p in c))
+    list[Part],
+    BeforeValidator(lambda c: [{"type": "input_text", "text": c}] if isinstance(c, str) else c),
+    AfterValidator(lambda c: "".join(p.text for p in c)),
 ]
 type Status = Literal["in_progress", "completed", "incomplete"]
 
@@ -126,6 +151,9 @@ type Item = Annotated[
     | CustomToolCallItem
     | CustomToolCallOutputItem,
     Field(discriminator="type"),
+    served(
+        "`{tag}` is not served: tokin runs no tool and stores no item, and translates only {expected_tags} onto chat"
+    ),
 ]
 
 
@@ -172,7 +200,11 @@ class NamespaceTool(TypedDict):
     tools: list[FunctionTool]
 
 
-type Tool = Annotated[FunctionTool | CustomTool | NamespaceTool, Field(discriminator="type")]
+type Tool = Annotated[
+    FunctionTool | CustomTool | NamespaceTool,
+    Field(discriminator="type"),
+    served("`{tag}` is not served: tokin runs no tool, and translates only {expected_tags} onto chat's functions"),
+]
 
 
 class Reasoning(BaseModel, extra="forbid"):
@@ -183,8 +215,9 @@ class OpenAIResponsesRequest(HarnessRequest, extra="forbid"):
     """The harness's `/v1/responses` body, served as the chat request it translates to.
 
     Undeclared keys are refused by name, and each declared one takes only the values `tokin` serves, so a refusal is
-    located at this body's keys. Leading system and developer messages become one system message: Qwen templates
-    refuse a `developer` role and a second system message.
+    located at this body's keys. Leading system and developer messages become one system message, and a later one a
+    user message tagged with its role, `<developer_message>`: Qwen templates refuse a `developer` role and a second
+    system message.
     """
 
     path = "/responses"
@@ -264,6 +297,9 @@ class OpenAIResponsesRequest(HarnessRequest, extra="forbid"):
             match item:
                 case MessageItem(role="system" | "developer") if not messages:
                     system.append(cast(str, item.content))
+                case MessageItem(role="system" | "developer"):
+                    tagged = f"<{item.role}_message>\n{item.content}\n</{item.role}_message>"
+                    messages.append({"role": "user", "content": tagged})
                 case MessageItem(role="assistant") if reply and not (reply["content"] or reply.get("tool_calls")):
                     reply["content"] = item.content
                 case MessageItem():
