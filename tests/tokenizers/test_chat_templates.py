@@ -145,12 +145,34 @@ TYPED_CALL = {
         }
     ],
 }
+# A custom tool's call as the Responses API serves it: one string, which a patch's lines and quotes must survive.
+PATCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "apply_patch",
+        "parameters": {"type": "object", "properties": {"input": {"type": "string"}}, "required": ["input"]},
+    },
+}
+PATCH = "*** Begin Patch\n*** Update File: a.py\n@@\n-    s = \"a\\b\"\n+    s = '<b> 旧'\n \n*** End Patch\n"
+CUSTOM_CALL = {
+    "role": "assistant",
+    "content": "",
+    "reasoning_content": "hmm",
+    "tool_calls": [
+        {
+            "id": "call_7",
+            "type": "function",
+            "function": {"name": "apply_patch", "arguments": json.dumps({"input": PATCH})},
+        }
+    ],
+}
 TURNS = {
     "reply": REPLY,
     "plain": {"role": "assistant", "content": "Sunny."},
     "call": CALL,
     "two calls": CALL2,
     "typed call": TYPED_CALL,
+    "custom call": CUSTOM_CALL,
 }
 
 
@@ -160,7 +182,7 @@ def calls(message):
 
 @pytest.mark.parametrize("turn", TURNS.values(), ids=list(TURNS))
 def test_parse_reads_back_the_rendered_turn(template, turn):
-    tools = [*TOOLS, TRIP_TOOL]
+    tools = [*TOOLS, TRIP_TOOL, PATCH_TOOL]
     prompt = template.apply([SYSTEM, USER], tools)
     full = template.apply(template.conform([SYSTEM, USER, turn]), tools, add_generation_prompt=False)
     if not full.startswith(prompt):
