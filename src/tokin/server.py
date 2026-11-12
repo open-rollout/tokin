@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from http import HTTPStatus
-from typing import Any, cast
+from typing import cast
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -17,7 +16,7 @@ from pydantic_core import InitErrorDetails
 
 from .chat_templates import ChatTemplateError
 from .gateway import ChatResponse, Gateway, GatewayError
-from .harness_apis import OpenAIChatRequest
+from .harness_apis import HarnessRequest, OpenAIChatRequest
 from .inference_engines import InferenceEngineError
 from .rollout import GenerationParams
 from .session import Session
@@ -97,8 +96,8 @@ class Server:
         """Forget the session; a turn still running finishes, but on a session no longer listed."""
         del self.sessions[self._session(sid).id]
 
-    def _answer(self, http: Request, exc: Exception) -> tuple[HTTPStatus, dict[str, Any]]:
-        """The status and OpenAI's error body for `exc`, logged with its reason, which the access log does not show."""
+    def _status(self, http: Request, exc: Exception) -> HTTPStatus:
+        """The status for `exc`, logged with its reason, which the access log does not show."""
         match exc:
             case GatewayError():
                 status = exc.status_code
@@ -107,35 +106,36 @@ class Server:
             case _:
                 status = HTTPStatus.BAD_REQUEST
         logger.warning("%s %s answered %d: %s", http.method, http.url.path, status, exc)
-        return status, OpenAIChatRequest.error(exc, status)
+        return status
 
     async def refuse(self, http: Request, exc: Exception) -> JSONResponse:
         if isinstance(exc, RequestValidationError):
             # FastAPI locates body errors under `body`, and the body is the harness's whole request.
             errors = [{**e, "loc": e["loc"][1:]} for e in exc.errors()]
             exc = ValidationError.from_exception_data("OpenAIChatRequest", cast(list[InitErrorDetails], errors))
-        status, body = self._answer(http, exc)
-        return JSONResponse(body, status)
+        status = self._status(http, exc)
+        return JSONResponse(OpenAIChatRequest.error(exc, status), status)
 
     async def _stream(
-        self, turn: asyncio.Future[ChatResponse], request: OpenAIChatRequest, http: Request
+        self, turn: asyncio.Future[ChatResponse], request: HarnessRequest, http: Request
     ) -> AsyncIterator[str]:
-        """The events of a turn still generating: keep-alive comments until it ends, then its reply or its error.
+        """The events of a turn still generating: keep-alives until it ends, then its reply or its error.
 
-        Its headers are sent already, so an error reaches the harness as OpenAI's error event, not a status. A harness
-        hanging up cancels this stream, and the turn with it.
+        Its headers are sent already, so an error reaches the harness as its API's error events, not a status. A
+        harness hanging up cancels this stream, and the turn with it.
         """
         try:
             while not turn.done():
                 await asyncio.wait({turn}, timeout=self.keepalive)
                 if not turn.done():
-                    yield ": keep-alive\n\n"
+                    yield request.keepalive_event()
             try:
                 reply = turn.result()
             except (GatewayError, ChatTemplateError, InferenceEngineError) as exc:
-                yield f"data: {json.dumps(self._answer(http, exc)[1])}\n\n"
+                for event in request.error_events(exc, self._status(http, exc)):
+                    yield event
                 return
-            for event in request.events(reply):
+            for event in request.response_events(reply):
                 yield event
         finally:
             turn.cancel()
@@ -169,5 +169,5 @@ class Server:
         # The turn ended before any reply was sent, so a refusal raises here and keeps its status.
         reply = turn.result()
         if request.stream:
-            return StreamingResponse(request.events(reply), media_type="text/event-stream")
+            return StreamingResponse(request.response_events(reply), media_type="text/event-stream")
         return request.response(reply)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Iterator
 from http import HTTPStatus
@@ -82,6 +83,9 @@ class OpenAIChatRequest(HarnessRequest, extra="forbid"):
         params = self.model_dump(include=set(GenerationParams.__optional_keys__), exclude_none=True)
         return ChatRequest(self.messages, self.tools, cast(GenerationParams, params))
 
+    def keepalive_event(self) -> str:
+        return ": keep-alive\n\n"
+
     def response(self, reply: ChatResponse) -> ChatCompletion:
         """The `ChatCompletion` for `reply`; a stop with tool calls reports `tool_calls`, which harnesses branch on."""
         stopped = reply.generation.finish_reason is FinishReason.STOP
@@ -101,7 +105,7 @@ class OpenAIChatRequest(HarnessRequest, extra="forbid"):
             }
         )
 
-    def events(self, reply: ChatResponse) -> list[str]:
+    def response_events(self, reply: ChatResponse) -> list[str]:
         """The response as OpenAI's stream: the whole reply in one chunk, usage in another if asked, then `[DONE]`.
 
         One chunk, as the turn is done before it is sent. Tool calls carry their `index` there: some clients
@@ -143,3 +147,7 @@ class OpenAIChatRequest(HarnessRequest, extra="forbid"):
                 code, param = "context_length_exceeded", "messages"
         kind = "invalid_request_error" if status < HTTPStatus.INTERNAL_SERVER_ERROR else "server_error"
         return {"error": {"message": message, "type": kind, "param": param, "code": code}}
+
+    def error_events(self, exc: Exception, status: HTTPStatus) -> list[str]:
+        """OpenAI's error event: the error body as a data line."""
+        return [f"data: {json.dumps(self.error(exc, status))}\n\n"]
