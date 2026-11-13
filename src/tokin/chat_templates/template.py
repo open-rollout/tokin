@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import base64
 import copy
+import functools
+import io
 import itertools
 import json
 from collections.abc import Iterable
 from typing import Any, ClassVar, cast
 
 import jinja2
+from PIL import Image
 from transformers import PreTrainedTokenizerBase
 
 from ..messages import (
@@ -47,6 +51,8 @@ class ChatTemplate:
             is a mistake the template would swallow.
         models (tuple[str, ...]): Checkpoints the family was verified against; the tokenizer
             tests run over them.
+        image_pad (str): The token the template writes once per image, which the engine expands to the
+            image's tokens. Empty for a family that renders no images: they are refused.
     """
 
     name: ClassVar[str] = ""
@@ -57,6 +63,7 @@ class ChatTemplate:
     stop: ClassVar[tuple[str, ...]] = ()
     kwargs: ClassVar[tuple[str, ...]] = ()
     models: ClassVar[tuple[str, ...]] = ()
+    image_pad: ClassVar[str] = ""
 
     def __init__(self, tokenizer: PreTrainedTokenizerBase, **kwargs: Any) -> None:
         self.tokenizer = tokenizer
@@ -65,6 +72,7 @@ class ChatTemplate:
         self._kwargs = kwargs
         self.tool_parser = get_tool_parser(self.tool_call_parser)
         self.stop_ids = frozenset(self._token_id(s) for s in self.stop)
+        self.image_pad_id = self._token_id(self.image_pad) if self.image_pad else None
         # Whether the generation prompt leaves reasoning open follows from the template and its kwargs alone.
         probe = self.apply([UserMessage(role="user", content="tokin-probe")])
         self.opens_reasoning = bool(self.reasoning_end) and probe.rfind(self.reasoning_start) > probe.rfind(
@@ -111,20 +119,44 @@ class ChatTemplate:
                 messages[i:j] = sorted(results, key=lambda r: order.index(r["tool_call_id"]))
                 i = j
 
-    def conform(self, messages: list[Message]) -> list[dict[str, Any]]:
+    def conform(self, messages: list[Message], images: list[str] | None = None) -> list[dict[str, Any]]:
         """Copy `messages` to the shape HF templates read: text joined, `arguments` as dicts, results in call order.
 
         A call the tool parser could not read renders as its block, the text the model wrote, after the reply's
-        content; its result stays where it was.
+        content; its result stays where it was. A message with image parts keeps its parts, and their URLs are
+        appended to `images` in the order the template renders them.
         """
         copies = cast(list[dict[str, Any]], copy.deepcopy(messages))
         # Only a string is content every template reads; Qwen3's renders a list of parts as nothing.
         for m in (m for m in copies if isinstance(m.get("content"), list)):
-            if any(part["type"] != "text" for part in m["content"]):
-                raise ChatTemplateError("only text content is supported")
-            m["content"] = "".join(part["text"] for part in m["content"])
+            if all(part["type"] == "text" for part in m["content"]):
+                m["content"] = "".join(part["text"] for part in m["content"])
+                continue
+            if any(part["type"] not in ("text", "image_url") for part in m["content"]):
+                raise ChatTemplateError("only text and image_url content is supported")
+            if not self.image_pad:
+                raise ChatTemplateError(f"{self.name} renders no images")
+            # A vision id ("Picture 1:") counts images over the whole conversation, which an increment rendered
+            # after a stub numbers from 1 again.
+            if self._kwargs.get("add_vision_id"):
+                raise ChatTemplateError("add_vision_id numbers images across turns, which increments cannot render")
+            if images is None:
+                raise ChatTemplateError("images render only where the caller collects them")
+            details = {part["image_url"].get("detail", "auto") for part in m["content"] if part["type"] == "image_url"}
+            if details - {"auto"}:
+                raise ChatTemplateError(f"image detail {sorted(details - {'auto'})} is not supported, only `auto`")
+            m["content"] = [
+                {"type": "text", "text": part["text"]}
+                if part["type"] == "text"
+                else {"type": "image_url", "image_url": {"url": part["image_url"]["url"]}}
+                for part in m["content"]
+            ]
         # Results are put in order while every call is still listed, so an unread one keeps its result.
         self.order_tool_results(copies)
+        if images is not None:
+            for m in copies:
+                if isinstance(m.get("content"), list):
+                    images.extend(part["image_url"]["url"] for part in m["content"] if part["type"] == "image_url")
         for m in (m for m in copies if m.get("tool_calls")):
             calls = []
             for call in m.pop("tool_calls"):
@@ -148,9 +180,10 @@ class ChatTemplate:
         tools: list[ToolSchema] | None = None,
         *,
         add_generation_prompt: bool = True,
+        images: list[str] | None = None,
     ) -> str:
         """The tokenizer's chat template over `messages`, conformed, with the family's kwargs."""
-        conformed = self.conform(messages)
+        conformed = self.conform(messages, images)
         try:
             text = self.tokenizer.apply_chat_template(
                 conformed,
@@ -193,11 +226,12 @@ class ChatTemplate:
         *,
         tool_calls: Iterable[ToolCall] | None = None,
         add_generation_prompt: bool,
+        images: list[str] | None = None,
     ) -> str:
         """The render of `messages` alone: rendered after a stub history, the stub's own render subtracted."""
         stub = self._stub(messages, tool_calls)
         before = self.apply(stub, tools, add_generation_prompt=False)
-        after = self.apply([*stub, *messages], tools, add_generation_prompt=add_generation_prompt)
+        after = self.apply([*stub, *messages], tools, add_generation_prompt=add_generation_prompt, images=images)
         if not after.startswith(before):
             raise ChatTemplateError(f"template rewrites earlier turns when appending {[m['role'] for m in messages]}")
         return after[len(before) :]
@@ -208,6 +242,7 @@ class ChatTemplate:
         tools: list[ToolSchema] | None = None,
         *,
         tool_calls: Iterable[ToolCall] | None = None,
+        images: list[str] | None = None,
     ) -> str:
         """The render of `messages` as the next increment of a rollout, its opening stop token dropped.
 
@@ -220,15 +255,38 @@ class ChatTemplate:
         for i, run in enumerate(runs):
             last = i == len(runs) - 1
             if run[0]["role"] == "tool":
-                text += self._apply_after_stub(run, tools, tool_calls=answered, add_generation_prompt=last)
+                text += self._apply_after_stub(
+                    run, tools, tool_calls=answered, add_generation_prompt=last, images=images
+                )
             else:
-                text += self._apply_after_stub(run, tools, add_generation_prompt=last)
+                text += self._apply_after_stub(run, tools, add_generation_prompt=last, images=images)
                 answered = cast(AssistantMessage, run[-1]).get("tool_calls") if run[-1]["role"] == "assistant" else None
         # The model stopped on the token that opens the increment, so the prompt already has it.
         for s in self.stop:
             if text.startswith(s):
                 return text[len(s) :]
         raise ChatTemplateError(f"the increment opens with {text[:16]!r}, which the model never stops on")
+
+    @functools.cached_property
+    def _image_processor(self) -> Any:
+        # Imported here: importing it at load repeats transformers' warning that torch is missing.
+        from transformers import AutoImageProcessor
+
+        return AutoImageProcessor.from_pretrained(self.tokenizer.name_or_path)
+
+    def image_tokens(self, url: str) -> int:
+        """The tokens the engine expands the image at `url` to, as the checkpoint's HF image processor counts them.
+
+        Only `data:` URLs. The processor is the one beside the tokenizer; the engine checks that it counts alike.
+        """
+        if not url.startswith("data:"):
+            raise ChatTemplateError("only data: image URLs are supported")
+        try:
+            image = Image.open(io.BytesIO(base64.b64decode(url.partition(",")[2])))
+        except (ValueError, OSError) as e:
+            raise ChatTemplateError(f"an image does not decode: {e}") from e
+        patches = self._image_processor.get_number_of_image_patches(image.height, image.width, {})
+        return int(patches // self._image_processor.merge_size**2)
 
     def parse(self, generation: Generation, tools: list[ToolSchema] | None = None) -> AssistantMessage:
         """Read back the assistant message `generation` wrote.

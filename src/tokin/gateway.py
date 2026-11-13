@@ -6,10 +6,10 @@ from dataclasses import dataclass, field, replace
 from http import HTTPStatus
 from typing import Any, ClassVar, cast
 
-from .chat_templates import ChatTemplate
+from .chat_templates import ChatTemplate, ChatTemplateError
 from .inference_engines import InferenceEngine, InferenceEngineError
 from .messages import AssistantMessage, Message, PromptMessage, ToolSchema
-from .rollout import FinishReason, Generation, GenerationParams, Prompt, Rollout, Turn
+from .rollout import FinishReason, Generation, GenerationParams, Image, Prompt, Rollout, Turn
 from .session import Session
 
 logger = logging.getLogger(__name__)
@@ -100,18 +100,27 @@ class Gateway:
         self._context_length_lock = asyncio.Lock()
         self._overruled_logged = False
 
-    def render(self, rollout: Rollout, messages: list[Message], tools: list[ToolSchema] | None) -> str:
+    def render(
+        self,
+        rollout: Rollout,
+        messages: list[Message],
+        tools: list[ToolSchema] | None,
+        images: list[str] | None = None,
+    ) -> str:
         """The text `messages` add to `rollout`, which they extend: all of them to a new one, else those it lacks.
 
-        Reads `rollout` only: usable to preview or count a turn without running it.
+        Reads `rollout` only: usable to preview or count a turn without running it. The URLs of the images the text
+        holds a pad for are appended to `images`, in order.
         """
         if not rollout.turns:
-            return self.template.apply(messages, tools)
+            return self.template.apply(messages, tools, images=images)
         answered = cast(AssistantMessage, rollout.messages[-1]).get("tool_calls")
         tail = cast(list[PromptMessage], messages[len(rollout.messages) :])
-        return self.template.apply_increment(tail, tools, tool_calls=answered)
+        return self.template.apply_increment(tail, tools, tool_calls=answered, images=images)
 
-    async def resume(self, ids: list[int], sampled: Generation, params: GenerationParams) -> Generation:
+    async def resume(
+        self, ids: list[int], sampled: Generation, params: GenerationParams, images: list[Image]
+    ) -> Generation:
         """The generation of `ids` that `sampled`, aborted, continues into, joined as if never cut.
 
         `params` are those `sampled` ran with. It comes back aborted again if the engine aborts once more, for `chat`
@@ -120,7 +129,7 @@ class Gateway:
         """
         # 1. Nothing sampled: the engine aborted before the first id; ask again whole.
         if not sampled.token_ids:
-            again = await self.engine.generate(ids, params)
+            again = await self.engine.generate(ids, params, images)
             return replace(again, usage=sampled.usage + again.usage)
         # 2. Budget spent: aborted on reaching `max_tokens`, the generation ends there as if cut by it.
         left = params["max_tokens"] - len(sampled)
@@ -139,7 +148,7 @@ class Gateway:
                 )
             routing, more["routed_experts_start"] = routing[: rows * row], fed
         # 4. Continue: from the ids sampled so far; aborted before its first id, it adds nothing to join.
-        rest = await self.engine.generate(ids + sampled.token_ids, more)
+        rest = await self.engine.generate(ids + sampled.token_ids, more, images)
         if rest.finish_reason is FinishReason.ABORT and not rest.token_ids:
             return replace(sampled, usage=sampled.usage + rest.usage)
         # 5. Join: one generation, ending as the continuation did.
@@ -187,12 +196,17 @@ class Gateway:
             # 1. Render: what this turn adds to the path of the turn it continues, as ids.
             parent = session.attach(request.messages, request.tools)
             rollout = session.rollout(parent)
-            text = self.render(rollout, request.messages, request.tools)
-            prompt = Prompt(self.template.encode(text))
-            # 2. Budget: what the context leaves for this turn's generation.
-            room = self.context_length - len(rollout) - len(prompt)
+            urls: list[str] = []
+            text = self.render(rollout, request.messages, request.tools, urls)
+            ids = self.template.encode(text)
+            # A pad the text wrote itself would take the place of an image the engine expands.
+            if urls and (pads := sum(i == self.template.image_pad_id for i in ids)) != len(urls):
+                raise ChatTemplateError(f"the prompt holds {pads} image pads for {len(urls)} images")
+            prompt = Prompt(ids, tuple(Image(url, self.template.image_tokens(url)) for url in urls))
+            # 2. Budget: what the context leaves for this turn's generation, each image counted as it expands.
+            room = self.context_length - rollout.expanded - prompt.expanded
             if room < 1:
-                raise ContextLengthExceededError(len(rollout) + len(prompt), self.context_length)
+                raise ContextLengthExceededError(rollout.expanded + prompt.expanded, self.context_length)
             params: GenerationParams = {
                 **DEFAULT_PARAMS,
                 **request.params,
@@ -202,15 +216,19 @@ class Gateway:
             }
             # Cut to the room left: a ceiling, so lowering it changes no generation that could fit.
             params["max_tokens"] = min(params.get("max_tokens", room), room)
+            images = [*rollout.images, *prompt.images]
             if params.get("return_routed_experts"):
+                # Routing rows count expanded positions, which neither `resume` nor `Rollout.routed_experts` do yet.
+                if images:
+                    raise GatewayError("return_routed_experts is not supported with images yet")
                 params["routed_experts_start"] = max(0, len(rollout) - 1)
-        # 3. Generate: the engine sees the rollout and the prompt, as ids only.
+        # 3. Generate: the engine sees the rollout and the prompt, as ids only, with the images their pads stand for.
         if generating:
             generating.set()
         ids = rollout.token_ids + prompt.token_ids
-        generation = await self.engine.generate(ids, params)
+        generation = await self.engine.generate(ids, params, images)
         while generation.finish_reason is FinishReason.ABORT and session.resume_aborted:
-            generation = await self.resume(ids, generation, params)
+            generation = await self.resume(ids, generation, params, images)
         # 4. Check: a stop must end on a stop id, since the next increment drops that token as already sampled.
         if generation.finish_reason is FinishReason.ABORT:
             raise GenerationAbortedError("the engine aborted the generation")
@@ -226,4 +244,4 @@ class Gateway:
             added = [*request.messages[len(rollout.messages) :], message]
             turn = Turn(prompt, generation, added, parent, request.tools if parent is None else None)
             session.turns.append(turn)
-        return ChatResponse(message, generation, len(rollout) + len(prompt), turn.id)
+        return ChatResponse(message, generation, rollout.expanded + prompt.expanded, turn.id)

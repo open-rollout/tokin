@@ -4,13 +4,13 @@ import asyncio
 import base64
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, ClassVar, cast
 
 import httpx2
 from transformers import AutoConfig
 
-from ..rollout import FinishReason, Generation, GenerationParams, GenerationUsage, Support, TopLogprobs
+from ..rollout import FinishReason, Generation, GenerationParams, GenerationUsage, Image, Support, TopLogprobs
 from .client import engine_client
 from .engine import InferenceEngine, InferenceEngineError
 
@@ -48,6 +48,7 @@ class SGLangEngine(InferenceEngine):
         self.retries = retries
         self.retry_delay = retry_delay
         self._routing: tuple[int, int] | None = None
+        self._image_pad: int | None = None
 
     async def request(
         self, method: str, path: str, payload: dict[str, Any] | None = None, headers: dict[str, str] | None = None
@@ -104,8 +105,51 @@ class SGLangEngine(InferenceEngine):
             self._routing = (config.num_hidden_layers, config.num_experts_per_tok)
         return self._routing
 
-    async def generate(self, token_ids: list[int], params: GenerationParams) -> Generation:
+    async def image_pad(self) -> int:
+        """The id sglang expands per image, read once from the config of the model it serves."""
+        if self._image_pad is None:
+            path = (await self.request("GET", "/get_model_info"))["model_path"]
+            config = await asyncio.to_thread(AutoConfig.from_pretrained, path)
+            if getattr(config, "image_token_id", None) is None:
+                raise InferenceEngineError(f"sglang serves {path}, which takes no images")
+            self._image_pad = int(config.image_token_id)
+        return self._image_pad
+
+    def check_expansion(self, sent: list[int], expanded: list[int], images: Sequence[Image], pad: int) -> None:
+        """Refuse a prompt sglang did not build from `sent` by expanding each image's pad to its `tokens`.
+
+        sglang re-tokenizes the decoded prompt when it cannot expand the ids it was sent, without failing the
+        request; only the prompt it returns shows it.
+        """
+        folded: list[int] = []
+        runs: list[int] = []
+        for i, token in enumerate(expanded):
+            if token == pad and i and expanded[i - 1] == pad:
+                runs[-1] += 1
+                continue
+            folded.append(token)
+            if token == pad:
+                runs.append(1)
+        if folded != sent:
+            at = next(
+                (i for i, (a, b) in enumerate(zip(folded, sent, strict=False)) if a != b), min(len(folded), len(sent))
+            )
+            raise InferenceEngineError(
+                f"sglang's prompt, its images folded, differs from the {len(sent)} ids sent at position {at}: "
+                "it re-tokenized them (`--mm-preprocess-cache-size-mb` keeps them)"
+            )
+        if runs != [image.tokens for image in images]:
+            raise InferenceEngineError(
+                f"sglang expanded the images to {runs} tokens, where the HF processor counts "
+                f"{[image.tokens for image in images]}"
+            )
+
+    async def generate(
+        self, token_ids: list[int], params: GenerationParams, images: Sequence[Image] = ()
+    ) -> Generation:
         payload: dict[str, Any] = {"input_ids": token_ids, "stream": False, "sampling_params": {}}
+        if images:
+            payload |= {"image_data": [image.url for image in images], "return_prompt_token_ids": True}
         sent = cast(GenerationParams, {k: v for k, v in params.items() if k != "session_id"})
         for name, value in self.translate(sent).items():
             target = payload if name in self.top_level_keys else payload["sampling_params"]
@@ -116,6 +160,12 @@ class SGLangEngine(InferenceEngine):
         if params.get("return_support") or params.get("top_logprobs"):
             payload["return_logprob"] = True
         out = await self.request("POST", "/generate", payload, headers)
+        if images:
+            if "prompt_token_ids" not in out:
+                raise InferenceEngineError("sglang returned no prompt_token_ids to check its image expansion against")
+            await asyncio.to_thread(
+                self.check_expansion, token_ids, out["prompt_token_ids"], images, await self.image_pad()
+            )
         return await asyncio.to_thread(self.read, out, params)
 
     def read(self, out: dict[str, Any], params: GenerationParams) -> Generation:

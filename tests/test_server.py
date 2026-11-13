@@ -95,7 +95,7 @@ async def test_a_harness_hanging_up_cancels_its_turn(gateway, stream):
     server, started, cancelled, hang_up, sent = Server(g := gateway()), asyncio.Event(), [], asyncio.Event(), []
     opened = asyncio.Event()
 
-    async def generate(token_ids, params):
+    async def generate(token_ids, params, images=()):
         started.set()
         try:
             await asyncio.Event().wait()
@@ -162,7 +162,7 @@ class TestStream:
     async def test_sends_keep_alives_while_generating(self, gateway):
         server = Server(g := gateway(), keepalive=0.01)
 
-        async def generate(token_ids, params):
+        async def generate(token_ids, params, images=()):
             await asyncio.sleep(0.05)
             return said("ok")
 
@@ -177,7 +177,7 @@ class TestStream:
     async def test_carries_a_failure_while_generating_as_an_error_event(self, gateway):
         server = Server(g := gateway(), keepalive=0.01)
 
-        async def generate(token_ids, params):
+        async def generate(token_ids, params, images=()):
             await asyncio.sleep(0.05)
             raise InferenceEngineError("the engine went away")
 
@@ -205,7 +205,7 @@ class TestResponsesStream:
     async def test_sends_keep_alives_while_generating(self, gateway):
         server = Server(g := gateway(), keepalive=0.01)
 
-        async def generate(token_ids, params):
+        async def generate(token_ids, params, images=()):
             await asyncio.sleep(0.05)
             return said("ok")
 
@@ -218,7 +218,7 @@ class TestResponsesStream:
     async def test_carries_a_failure_while_generating_as_failed(self, gateway):
         server = Server(g := gateway(), keepalive=0.01)
 
-        async def generate(token_ids, params):
+        async def generate(token_ids, params, images=()):
             await asyncio.sleep(0.05)
             raise InferenceEngineError("the engine went away")
 

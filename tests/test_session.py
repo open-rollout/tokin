@@ -6,7 +6,7 @@ import pytest
 from conftest import said
 from safetensors.numpy import load, save
 
-from tokin.rollout import FinishReason, Generation, GenerationUsage, Prompt, Support, TopLogprobs, Turn
+from tokin.rollout import FinishReason, Generation, GenerationUsage, Image, Prompt, Support, TopLogprobs, Turn
 from tokin.server import Server
 from tokin.session import Session
 
@@ -18,8 +18,8 @@ OTHER = {"role": "user", "content": "call a tool"}
 TOOL = {"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}}
 
 
-def turn(prompt, generation, messages, parent=None, tools=None, finish=FinishReason.STOP, **kwargs):
-    return Turn(Prompt(prompt), Generation(generation, finish, **kwargs), messages, parent, tools)
+def turn(prompt, generation, messages, parent=None, tools=None, finish=FinishReason.STOP, images=(), **kwargs):
+    return Turn(Prompt(prompt, images), Generation(generation, finish, **kwargs), messages, parent, tools)
 
 
 def rows(*values):
@@ -41,7 +41,8 @@ def test_unpack_restores_what_pack_wrote():
         usage=GenerationUsage(2, 1, 4, 3, 2),
     )
     bare = turn([5], [6], [RESULT, REPLY], parent=0, finish=FinishReason.LENGTH)
-    session = Session("s1", [carried, bare], {"temperature": 1.0})
+    seen = turn([7, 8], [9], [AGAIN, REPLY], parent=1, images=(Image("data:a", 3), Image("data:b", 1)))
+    session = Session("s1", [carried, bare, seen], {"temperature": 1.0})
     assert Session.unpack(session.pack()) == session
 
 
