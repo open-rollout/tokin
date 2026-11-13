@@ -30,10 +30,13 @@ python examples/harbor_eval/run.py --benchmark terminal-bench-2.1 --agent pi --s
 | Option | Values |
 |---|---|
 | `--benchmark` | `terminal-bench-2.1`, `swebench-verified` |
-| `--agent` | `mini-swe-agent`, `pi`, `opencode` |
+| `--agent` | `mini-swe-agent`, `pi`, `opencode`, `codex` |
 | `--samples` | samples per task, pass@k up to it |
 
 `--help` lists the rest. Running the same command again resumes.
+
+Codex compacts its history at 90% of the context it is told, 262,144 tokens by default; against an engine serving
+another, pass it: `--agent-kwargs '{"context_window": 65536}'`.
 
 ## How it works
 
