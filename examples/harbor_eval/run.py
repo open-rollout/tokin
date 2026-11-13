@@ -74,6 +74,22 @@ AGENTS: dict[str, dict[str, Any]] = {
             }
         },
     },
+    # Codex's context window is the one the README serves Qwen3.6 at. Off, each for a reason of its own:
+    # - web search: a hosted tool, which no engine runs;
+    # - reasoning summaries: a digest of the reasoning, which tokin does not write;
+    # - the image viewer: its output is an image, which tokin, serving text, refuses;
+    # - sub-agents: each runs a trajectory of its own in the session;
+    # - goals: they keep a run going past its last turn.
+    "codex": {
+        "import_path": "agents:PrebuiltCodex",
+        "model": "openai/policy",
+        "kwargs": {
+            "context_window": 262144,
+            "web_search": "disabled",
+            "reasoning_summary": "none",
+            "config": {"features": {"view_image": False, "multi_agent": False, "goals": False}},
+        },
+    },
 }
 # A sample that failed outside the policy runs again, since that biases nothing: the sandbox's connection dropping
 # (exit -1), the sandbox dying under the agent (exit 135), Harbor finding no reward, or the verifier timing out.

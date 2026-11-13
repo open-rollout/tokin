@@ -60,6 +60,19 @@ pi as usual:
 pi --provider tokin --model Qwen/Qwen3.5-0.8B "Write a haiku about tokens to haiku.txt."
 ```
 
+For [Codex](https://github.com/openai/codex), which speaks the Responses API, add it as a provider in
+`~/.codex/config.toml` instead; [`examples/harbor_eval`](examples/harbor_eval/agents/codex.py) has a full setup:
+
+```toml
+model_provider = "tokin"
+
+[model_providers.tokin]
+name = "tokin"
+base_url = "<URL>"
+wire_api = "responses"
+supports_websockets = false
+```
+
 Collect the session, one JSON line per rollout with its `token_ids`, `loss_mask` and
 `logprobs`:
 
@@ -69,5 +82,5 @@ tokin collect "$URL" -o rollouts.jsonl
 
 ## Examples
 
-- [`examples/harbor_eval`](examples/harbor_eval): evaluate mini-swe-agent, opencode or pi through tokin on [Harbor](https://github.com/harbor-framework/harbor).
+- [`examples/harbor_eval`](examples/harbor_eval): evaluate mini-swe-agent, opencode, pi or Codex through tokin on [Harbor](https://github.com/harbor-framework/harbor).
 - [`examples/pi_mimo_rl`](examples/pi_mimo_rl): train pi with slime on MiMo-V2.6-RL-oss.
