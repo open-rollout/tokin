@@ -21,7 +21,7 @@ class Stub(InferenceEngine):
     async def context_length(self):
         return None
 
-    async def generate(self, token_ids, params):
+    async def generate(self, token_ids, params, images=()):
         return Generation(token_ids=[], finish_reason="stop")
 
 

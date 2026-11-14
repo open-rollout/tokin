@@ -8,7 +8,7 @@ import pytest
 
 from tokin.inference_engines import InferenceEngineError, SGLangEngine, sglang
 from tokin.inference_engines.client import ShardedTransport
-from tokin.rollout import Generation, GenerationUsage, Support, TopLogprobs
+from tokin.rollout import Generation, GenerationUsage, Image, Support, TopLogprobs
 
 REPLY = {
     "text": "ok",
@@ -118,6 +118,29 @@ class TestRouting:
     async def test_a_model_without_experts_is_refused(self, served):
         with pytest.raises(InferenceEngineError, match="routes to no experts"):
             await served("dense")[0].routing()
+
+
+async def test_image_pad_of_a_model_without_images_is_refused(monkeypatch):
+    monkeypatch.setattr(sglang.AutoConfig, "from_pretrained", lambda path: SimpleNamespace())
+    engine = against(lambda request: httpx2.Response(200, json={"model_path": "text-only"}))
+    with pytest.raises(InferenceEngineError, match="serves text-only, which takes no images"):
+        await engine.image_pad()
+
+
+class TestCheckExpansion:
+    def check(self, expanded, tokens=(3,)):
+        SGLangEngine("http://sglang/").check_expansion([1, 9, 2], expanded, [Image("data:a", n) for n in tokens], 9)
+
+    def test_passes_the_ids_sent_with_each_pad_expanded(self):
+        self.check([1, 9, 9, 9, 2])
+
+    def test_refuses_a_prompt_re_tokenized(self):
+        with pytest.raises(InferenceEngineError, match="differs from the 3 ids sent at position 2"):
+            self.check([1, 9, 9, 9, 4, 2])
+
+    def test_refuses_an_image_counted_otherwise(self):
+        with pytest.raises(InferenceEngineError, match=r"expanded the images to \[2\] tokens, .* counts \[3\]"):
+            self.check([1, 9, 9, 2])
 
 
 async def test_context_length_is_retried():
@@ -251,6 +274,19 @@ class TestGenerate:
         [body] = fake.requests
         assert body["return_routed_experts"] is True and body["routed_experts_start_len"] == 9
         assert "routed_experts_start_len" not in body["sampling_params"] and got.routed_experts == buffer
+
+    async def test_images_go_beside_their_pads_and_the_prompt_comes_back_checked(self):
+        fake = FakeSGLang({**REPLY, "prompt_token_ids": [1, 9, 9, 9, 2]})
+        engine = against(fake.handle)
+        engine._image_pad = 9
+        got = await engine.generate([1, 9, 2], {"max_tokens": 8}, [Image("data:a", 3)])
+        [body] = fake.requests
+        assert body["image_data"] == ["data:a"] and body["return_prompt_token_ids"] is True
+        assert got.token_ids == [5, 6, 3]
+
+    async def test_images_without_the_prompt_back_are_refused(self):
+        with pytest.raises(InferenceEngineError, match="no prompt_token_ids"):
+            await against(FakeSGLang().handle).generate([1, 9, 2], {"max_tokens": 8}, [Image("data:a", 3)])
 
     async def test_unknown_keys_are_sampling_params(self):
         fake = FakeSGLang()

@@ -1,5 +1,9 @@
+import base64
+import io
+
 import jinja2
 import pytest
+from PIL import Image
 
 from tokin.chat_templates import ChatTemplate
 from tokin.gateway import Gateway
@@ -7,11 +11,12 @@ from tokin.inference_engines import InferenceEngine
 from tokin.rollout import FinishReason, Generation
 
 # One private-use character per control token, so each is a single id.
-START, END = "", ""
+START, END, PAD = "", "", ""
 CHATML = (
     "{%- for m in messages %}{{ start ~ m.role ~ '\\n' }}"
     "{%- if m.role == 'system' and tools %}tools={{ tools | tojson }}{% endif %}"
-    "{{ m.content }}"
+    "{%- if m.content is string or m.content is none %}{{ m.content }}"
+    "{%- else %}{% for p in m.content %}{{ p.text if p.type == 'text' else pad }}{% endfor %}{% endif %}"
     "{%- for c in m.tool_calls or [] %}<call>{{ c.function.arguments | tojson }}</call>{% endfor %}"
     "{%- if m.tool_call_id %}<id>{{ m.tool_call_id }}</id>{% endif %}"
     "{{ end ~ '\\n' }}{%- endfor %}"
@@ -36,6 +41,7 @@ class FakeTokenizer:
             raise_exception=raise_exception,
             start=START,
             end=END,
+            pad=PAD,
             **kwargs,
         )
 
@@ -46,6 +52,22 @@ class FakeTokenizer:
         return "".join(map(chr, ids))
 
 
+class Pixels:
+    """An image processor that counts a token per pixel."""
+
+    merge_size = 1
+
+    def get_number_of_image_patches(self, height, width, kwargs):
+        return height * width
+
+
+def image(width, height):
+    buffer = io.BytesIO()
+    Image.new("RGB", (width, height)).save(buffer, "PNG")
+    url = f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode()}"
+    return {"type": "image_url", "image_url": {"url": url}}
+
+
 class ChatML(ChatTemplate):
     name = "chatml"
     turn_end = f"{END}\n"
@@ -53,7 +75,9 @@ class ChatML(ChatTemplate):
     reasoning_end = "</think>"
     tool_call_parser = "hermes"
     stop = (END,)
-    kwargs = ("enable_thinking",)
+    kwargs = ("enable_thinking", "add_vision_id")
+    image_pad = PAD
+    _image_processor = Pixels()
 
 
 @pytest.fixture
@@ -64,6 +88,7 @@ def chatml():
 class Engine(InferenceEngine):
     def __init__(self, *replies, context_length=1000, routing=None):
         self.replies, self.calls, self.length, self.row = list(replies), [], context_length, routing
+        self.images = []
 
     async def ready(self):
         pass
@@ -74,8 +99,9 @@ class Engine(InferenceEngine):
     async def routing(self):
         return self.row or await super().routing()
 
-    async def generate(self, token_ids, params):
+    async def generate(self, token_ids, params, images=()):
         self.calls.append((token_ids, params))
+        self.images.append(list(images))
         return self.replies.pop(0)
 
 

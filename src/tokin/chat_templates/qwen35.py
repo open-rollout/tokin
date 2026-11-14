@@ -11,6 +11,7 @@ class Qwen35ChatTemplate(ChatTemplate):
     tool_call_parser = "qwen3_coder"
     stop = ("<|im_end|>", "<|endoftext|>")
     kwargs = ("enable_thinking", "preserve_thinking", "add_vision_id")
+    image_pad = "<|image_pad|>"
     models = (
         "Qwen/Qwen3.5-0.8B",
         "Qwen/Qwen3.5-2B",
