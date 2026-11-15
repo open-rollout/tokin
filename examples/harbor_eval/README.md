@@ -57,11 +57,11 @@ harbor-eval/<benchmark>/<agent>/
 
 Qwen3.6-35B-A3B:
 
-| | `mini-swe-agent` | `opencode` | `pi` |
-|---|:---:|:---:|:---:|
-| Terminal-Bench 2.1, pass@1 | 0.451 | 0.454 | 0.438 |
-| Terminal-Bench 2.1, pass@4 | 0.616 | 0.655 | 0.625 |
-| SWE-bench Verified, pass@1 | 0.689 | 0.666 | 0.690 |
+| | `mini-swe-agent` | `opencode` | `pi` | `codex` |
+|---|:---:|:---:|:---:|:---:|
+| Terminal-Bench 2.1, pass@1 | 0.451 | 0.454 | 0.438 | 0.441 |
+| Terminal-Bench 2.1, pass@4 | 0.616 | 0.655 | 0.625 | 0.663 |
+| SWE-bench Verified, pass@1 | 0.689 | 0.666 | 0.690 | 0.658 |
 
 Terminal-Bench 2.1 is 89 tasks × 4 samples and SWE-bench Verified 500 tasks × 1, both with:
 
