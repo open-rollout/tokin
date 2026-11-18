@@ -8,7 +8,7 @@ import pytest
 
 from tokin.inference_engines import InferenceEngineError, SGLangEngine, sglang
 from tokin.inference_engines.client import ShardedTransport
-from tokin.rollout import Generation, GenerationUsage, Image, Support, TopLogprobs
+from tokin.rollout import FinishReason, Generation, GenerationUsage, Image, Support, TopLogprobs
 
 REPLY = {
     "text": "ok",
@@ -284,6 +284,18 @@ class TestGenerate:
         assert body["input_ids"] == [1, 9, 2] and body["image_data"] == ["data:a"]
         assert body["return_prompt_token_ids"] is True
         assert got.token_ids == [5, 6, 3]
+
+    async def test_an_abort_before_scheduling_is_nothing_done(self):
+        # The answer sglang's tokenizer manager builds for a request it aborts itself: no prompt, no counts.
+        aborted = {
+            "text": "",
+            "output_ids": [],
+            "meta_info": {"finish_reason": {"type": "abort"}, "completion_tokens": 0},
+        }
+        engine = against(FakeSGLang(aborted).handle)
+        engine._config = SimpleNamespace(image_token_id=9)
+        got = await engine.generate([1, 9, 9, 9, 2], {"max_tokens": 8}, [Image("data:a", 3)])
+        assert (got.finish_reason, got.token_ids, got.usage) == (FinishReason.ABORT, [], GenerationUsage(0, 0))
 
     async def test_images_without_the_prompt_back_are_refused(self):
         engine = against(FakeSGLang().handle)
