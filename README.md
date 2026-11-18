@@ -65,6 +65,8 @@ For [Codex](https://github.com/openai/codex), which speaks the Responses API, ad
 
 ```toml
 model_provider = "tokin"
+web_search = "disabled"
+model_reasoning_summary = "none"
 
 [model_providers.tokin]
 name = "tokin"
