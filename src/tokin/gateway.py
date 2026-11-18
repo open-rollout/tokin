@@ -44,12 +44,6 @@ class ReservedParamsError(GatewayError):
     status_code = HTTPStatus.BAD_REQUEST
 
 
-class UnsupportedParamsError(GatewayError):
-    """The params ask for something the gateway does not serve with this request."""
-
-    status_code = HTTPStatus.BAD_REQUEST
-
-
 @dataclass(frozen=True, slots=True)
 class ChatRequest:
     """The input of `Gateway.chat`: one turn, independent of the harness's wire API.
@@ -207,11 +201,16 @@ class Gateway:
             # A pad the text wrote itself would take the place of an image the engine expands.
             if urls and (pads := sum(i == self.template.image_pad_id for i in ids)) != len(urls):
                 raise ChatTemplateError(f"the prompt holds {pads} image pads for {len(urls)} images")
-            prompt = Prompt(ids, tuple(Image(url, self.template.image_tokens(url)) for url in urls))
-            # 2. Budget: what the context leaves for this turn's generation, each image counted as it expands.
-            room = self.context_length - rollout.expanded - prompt.expanded
+            images = tuple(Image(url, self.template.image_tokens(url)) for url in urls)
+            if images:
+                # Each pad becomes its image's `tokens` pads, the positions the model sees the image at.
+                counts = iter(image.tokens for image in images)
+                ids = [i for t in ids for i in ([t] * next(counts) if t == self.template.image_pad_id else [t])]
+            prompt = Prompt(ids, images)
+            # 2. Budget: what the context leaves for this turn's generation.
+            room = self.context_length - len(rollout) - len(prompt)
             if room < 1:
-                raise ContextLengthExceededError(rollout.expanded + prompt.expanded, self.context_length)
+                raise ContextLengthExceededError(len(rollout) + len(prompt), self.context_length)
             params: GenerationParams = {
                 **DEFAULT_PARAMS,
                 **request.params,
@@ -221,19 +220,15 @@ class Gateway:
             }
             # Cut to the room left: a ceiling, so lowering it changes no generation that could fit.
             params["max_tokens"] = min(params.get("max_tokens", room), room)
-            images = [*rollout.images, *prompt.images]
             if params.get("return_routed_experts"):
-                # Routing rows count expanded positions, which neither `resume` nor `Rollout.routed_experts` do yet.
-                if images:
-                    raise UnsupportedParamsError("return_routed_experts is not supported with images yet")
                 params["routed_experts_start"] = max(0, len(rollout) - 1)
         # 3. Generate: the engine sees the rollout and the prompt, as ids only, with the images their pads stand for.
         if generating:
             generating.set()
-        ids = rollout.token_ids + prompt.token_ids
-        generation = await self.engine.generate(ids, params, images)
+        ids, shown = rollout.token_ids + prompt.token_ids, [*rollout.images, *prompt.images]
+        generation = await self.engine.generate(ids, params, shown)
         while generation.finish_reason is FinishReason.ABORT and session.resume_aborted:
-            generation = await self.resume(ids, generation, params, images)
+            generation = await self.resume(ids, generation, params, shown)
         # 4. Check: a stop must end on a stop id, since the next increment drops that token as already sampled.
         if generation.finish_reason is FinishReason.ABORT:
             raise GenerationAbortedError("the engine aborted the generation")
@@ -249,4 +244,4 @@ class Gateway:
             added = [*request.messages[len(rollout.messages) :], message]
             turn = Turn(prompt, generation, added, parent, request.tools if parent is None else None)
             session.turns.append(turn)
-        return ChatResponse(message, generation, rollout.expanded + prompt.expanded, turn.id)
+        return ChatResponse(message, generation, len(rollout) + len(prompt), turn.id)

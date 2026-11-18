@@ -115,8 +115,8 @@ class Session:
 
         Each turn `t` is stored once, however many rollouts run through it:
 
-            `{t}.prompt`          `int32`    the ids rendered for it, one pad id per image
-            `{t}.image_tokens`    `int32`    the tokens each of its images expands to, when it has images
+            `{t}.prompt`          `int32`    the ids rendered for it, each image as its pads
+            `{t}.image_tokens`    `int32`    the pads each of its images takes, when it has images
             `{t}.generation`      `int32`    the ids sampled
             `{t}.logprobs`        `float32`  the generation's logprobs, when it carries them
             `{t}.routed_experts`  `int32`    the generation's routing, the engine's buffer as it came

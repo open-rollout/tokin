@@ -62,12 +62,6 @@ def test_token_ids_returns_a_fresh_list():
     assert r.token_ids == [1, 2]
 
 
-def test_an_image_counts_as_the_tokens_it_expands_to():
-    seen = Turn(Prompt([1, 2, 3], (Image("data:a", 4), Image("data:b", 2))), gen(4), [USER, REPLY])
-    rollout = Rollout([seen, turn([5], gen(6))])
-    assert (seen.prompt.expanded, rollout.expanded, len(rollout)) == (7, 10, 6)
-
-
 def test_images_follow_the_order_of_their_pads():
     first = Turn(Prompt([1], (Image("data:a", 1),)), gen(2), [USER, REPLY])
     second = Turn(Prompt([3], (Image("data:b", 1),)), gen(4), [USER, REPLY])
