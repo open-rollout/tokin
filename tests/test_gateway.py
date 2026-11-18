@@ -8,9 +8,9 @@ from tokin.chat_templates import ChatTemplateError
 from tokin.gateway import (
     ChatRequest,
     ContextLengthExceededError,
-    GatewayError,
     GenerationAbortedError,
     ReservedParamsError,
+    UnsupportedParamsError,
 )
 from tokin.inference_engines import InferenceEngineError
 from tokin.rollout import FinishReason, Generation, GenerationUsage, Image, Support, TopLogprobs
@@ -176,7 +176,7 @@ class TestChat:
             await gateway().chat(Session(), ChatRequest([stray]))
 
     async def test_routed_experts_with_images_are_refused(self, gateway):
-        with pytest.raises(GatewayError, match="return_routed_experts is not supported with images"):
+        with pytest.raises(UnsupportedParamsError, match="return_routed_experts is not supported with images"):
             await gateway().chat(Session(), ChatRequest([LOOK], params={"return_routed_experts": True}))
 
     async def test_logprobs_are_on_unless_turned_off(self, gateway):

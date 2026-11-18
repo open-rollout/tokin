@@ -44,6 +44,12 @@ class ReservedParamsError(GatewayError):
     status_code = HTTPStatus.BAD_REQUEST
 
 
+class UnsupportedParamsError(GatewayError):
+    """The params ask for something the gateway does not serve with this request."""
+
+    status_code = HTTPStatus.BAD_REQUEST
+
+
 @dataclass(frozen=True, slots=True)
 class ChatRequest:
     """The input of `Gateway.chat`: one turn, independent of the harness's wire API.
@@ -219,7 +225,7 @@ class Gateway:
             if params.get("return_routed_experts"):
                 # Routing rows count expanded positions, which neither `resume` nor `Rollout.routed_experts` do yet.
                 if images:
-                    raise GatewayError("return_routed_experts is not supported with images yet")
+                    raise UnsupportedParamsError("return_routed_experts is not supported with images yet")
                 params["routed_experts_start"] = max(0, len(rollout) - 1)
         # 3. Generate: the engine sees the rollout and the prompt, as ids only, with the images their pads stand for.
         if generating:
