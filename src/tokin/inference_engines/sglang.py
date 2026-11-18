@@ -133,7 +133,7 @@ class SGLangEngine(InferenceEngine):
             )
         at = next((i for i, (a, b) in enumerate(zip(seen, token_ids, strict=False)) if a != b), len(token_ids))
         raise InferenceEngineError(
-            f"sglang's prompt differs from the {len(token_ids)} ids sent at position {at}: "
+            f"sglang's prompt differs from the {len(token_ids)} ids the model was to see at position {at}: "
             "it re-tokenized them (`--mm-preprocess-cache-size-mb` keeps them)"
         )
 

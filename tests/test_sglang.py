@@ -135,7 +135,7 @@ class TestCheckExpansion:
         self.check([1, 9, 9, 9, 2])
 
     def test_refuses_a_prompt_re_tokenized(self):
-        with pytest.raises(InferenceEngineError, match="differs from the 5 ids sent at position 4"):
+        with pytest.raises(InferenceEngineError, match="differs from the 5 ids the model was to see at position 4"):
             self.check([1, 9, 9, 9, 4, 2])
 
     def test_refuses_an_image_counted_otherwise(self):
