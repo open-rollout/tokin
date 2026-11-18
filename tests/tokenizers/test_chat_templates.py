@@ -1,9 +1,12 @@
+import base64
+import io
 import json
 
 import jinja2
 import pytest
 from jinja2 import meta
-from transformers import AutoConfig, AutoTokenizer, GenerationConfig
+from PIL import Image
+from transformers import AutoConfig, AutoImageProcessor, AutoTokenizer, GenerationConfig
 
 from tokin.chat_templates import CHAT_TEMPLATES, ChatTemplateError, get_chat_template
 from tokin.chat_templates.glm45 import GLM45ChatTemplate
@@ -77,6 +80,15 @@ SCENARIOS = {
         None,
     ),
 }
+IMAGES = [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{n}"}} for n in ("AA", "BB")]
+TEXT = {"type": "text", "text": "What is this?"}
+# history, new messages, tools, the calls the results answer
+IMAGE_SCENARIOS = {
+    "user image": ([SYSTEM, USER, REPLY], [user([TEXT, IMAGES[0]])], None, None),
+    "image in history": ([SYSTEM, user([IMAGES[0], TEXT]), REPLY], [user("And this?")], None, None),
+    "two images": ([SYSTEM, USER, REPLY], [user([IMAGES[0], TEXT, IMAGES[1]])], None, None),
+    "tool,user image": ([SYSTEM, USER, CALL], [RESULT, user([IMAGES[1]])], TOOLS, CALLS[:1]),
+}
 # Qwen3.5 and 3.8 raise on any system message that is not the first; GLM never stops on <|system|>. All fork.
 REFUSES_MID_SYSTEM = {*Qwen35ChatTemplate.models, *Qwen38ChatTemplate.models, *GLM45ChatTemplate.models}
 
@@ -110,6 +122,47 @@ def test_every_turn_opens_reasoning_as_the_template_says(template, scenario):
         pytest.skip("the family takes no system message after the conversation starts")
     for text in (template.apply(history + new, tools), template.apply_increment(new, tools, tool_calls=tool_calls)):
         assert (text.rfind(template.reasoning_start) > text.rfind(template.reasoning_end)) is template.opens_reasoning
+
+
+def image_token(template):
+    return getattr(AutoConfig.from_pretrained(template.tokenizer.name_or_path), "image_token_id", None)
+
+
+@pytest.fixture
+def seeing(template):
+    # The template, where the family renders images and the checkpoint takes them.
+    if not template.image_pad or image_token(template) is None:
+        pytest.skip("no images for this checkpoint")
+    return template
+
+
+@pytest.mark.parametrize("scenario", IMAGE_SCENARIOS.values(), ids=IMAGE_SCENARIOS.keys())
+def test_increment_with_images_is_a_token_suffix_of_the_full_render(seeing, scenario):
+    history, new, tools, tool_calls = scenario
+    increment = seeing.encode(seeing.apply_increment(new, tools, tool_calls=tool_calls))
+    full = seeing.encode(seeing.apply(history + new, tools))
+    prefix = full[: len(full) - len(increment)]
+    assert full == prefix + increment and prefix[-1] in seeing.stop_ids
+
+    def pictures(messages):
+        return sum(p["type"] == "image_url" for m in messages if isinstance(m["content"], list) for p in m["content"])
+
+    # One pad per image, so the gateway can read which images a render's pads stand for off its messages.
+    assert (increment.count(seeing.image_pad_id), full.count(seeing.image_pad_id)) == (
+        pictures(new),
+        pictures(history + new),
+    )
+
+
+def test_image_tokens_are_the_grid_the_processor_makes(seeing):
+    processor = AutoImageProcessor.from_pretrained(seeing.tokenizer.name_or_path)
+    for size in ((640, 480), (28, 2000), (3000, 3000)):
+        buffer = io.BytesIO()
+        Image.new("RGB", size).save(buffer, "PNG")
+        url = f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode()}"
+        # One row of `pixel_values` per patch, as the vision tower embeds them.
+        patches = len(processor(images=[Image.new("RGB", size)], return_tensors="np")["pixel_values"])
+        assert seeing.image_tokens(url) == patches // processor.merge_size**2
 
 
 def test_suffix_check_fails_without_the_turn_end_remainder():
@@ -209,6 +262,10 @@ def test_parse_reads_back_the_rendered_turn(template, turn):
     reasoning = turn.get("reasoning_content")
     # Templates that render no reasoning for this turn (Qwen2.5, thinking off) must read none back.
     assert got.get("reasoning_content") == (reasoning if reasoning and reasoning in full else None)
+
+
+def test_declared_image_pad_is_the_models_image_token(seeing):
+    assert seeing.image_pad_id == image_token(seeing)
 
 
 def test_get_template_returns_the_family_of_each_model(template):

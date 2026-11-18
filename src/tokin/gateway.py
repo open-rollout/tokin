@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from http import HTTPStatus
 from typing import Any, ClassVar, cast
 
-from .chat_templates import ChatTemplate
+from .chat_templates import ChatTemplate, ChatTemplateError
 from .inference_engines import InferenceEngine, InferenceEngineError
 from .messages import AssistantMessage, Message, PromptMessage, ToolSchema
 from .rollout import FinishReason, Generation, GenerationParams, Prompt, Rollout, Turn
@@ -188,6 +188,16 @@ class Gateway:
             parent = session.attach(request.messages, request.tools)
             rollout = session.rollout(parent)
             text = self.render(rollout, request.messages, request.tools)
+            # The template renders a message's parts in order, so the pads stand for the images of the added messages.
+            urls = [
+                part["image_url"]["url"]
+                for m in request.messages[len(rollout.messages) :]
+                if isinstance(content := m.get("content"), list)
+                for part in content
+                if part["type"] == "image_url"
+            ]
+            if urls:
+                raise ChatTemplateError("images are not supported yet: the engine is not sent them")
             prompt = Prompt(self.template.encode(text))
             # 2. Budget: what the context leaves for this turn's generation.
             room = self.context_length - len(rollout) - len(prompt)
