@@ -160,10 +160,11 @@ class SGLangEngine(InferenceEngine):
         if params.get("return_support") or params.get("top_logprobs"):
             payload["return_logprob"] = True
         out = await self.request("POST", "/generate", payload, headers)
-        if images:
-            if "prompt_token_ids" not in out:
-                raise InferenceEngineError("sglang returned no prompt_token_ids to check its image expansion against")
+        if images and "prompt_token_ids" in out:
             await asyncio.to_thread(self.check_expansion, token_ids, out["prompt_token_ids"], images, pad)
+        # An abort before scheduling returns no prompt, and sampled nothing from one to check.
+        elif images and (out["output_ids"] or out["meta_info"]["finish_reason"]["type"] != "abort"):
+            raise InferenceEngineError("sglang returned no prompt_token_ids to check its image expansion against")
         return await asyncio.to_thread(self.read, out, params)
 
     def read(self, out: dict[str, Any], params: GenerationParams) -> Generation:
@@ -173,7 +174,7 @@ class SGLangEngine(InferenceEngine):
             finish_reason = FinishReason(meta["finish_reason"]["type"])
         except ValueError as e:
             raise InferenceEngineError(f"sglang finished with {meta['finish_reason']}") from e
-        sampled = out["output_ids"]
+        sampled, aborted = out["output_ids"], finish_reason is FinishReason.ABORT
         # Asked for and missing: an sglang without slime's top-p patch, or no cut to report; never a fallback.
         if params.get("return_support") and sampled and "top_p_token_ids" not in meta:
             raise InferenceEngineError(
@@ -201,9 +202,10 @@ class SGLangEngine(InferenceEngine):
             top_logprobs=top_logprobs,
             weight_versions=tuple((str(r["version"]), r["start"], r["end"]) for r in meta.get("weight_versions", ())),
             # sglang reports the speculative counts only when it decodes speculatively.
+            # sglang's answer to a request it aborts itself carries no prompt counts.
             usage=GenerationUsage(
-                prompt_tokens=meta["prompt_tokens"],
-                cached_tokens=meta["cached_tokens"],
+                prompt_tokens=meta["prompt_tokens"] if "prompt_tokens" in meta or not aborted else 0,
+                cached_tokens=meta["cached_tokens"] if "cached_tokens" in meta or not aborted else 0,
                 draft_tokens=meta.get("spec_num_proposed_drafts", 0),
                 accepted_tokens=meta.get("spec_num_correct_drafts", 0),
                 verify_steps=meta.get("spec_verify_ct", 0),
