@@ -8,7 +8,7 @@ from collections.abc import Callable, Sequence
 from typing import Any, ClassVar, cast
 
 import httpx2
-from transformers import AutoConfig
+from transformers import AutoConfig, PreTrainedConfig
 
 from ..rollout import FinishReason, Generation, GenerationParams, GenerationUsage, Image, Support, TopLogprobs
 from .client import engine_client
@@ -47,8 +47,7 @@ class SGLangEngine(InferenceEngine):
         self.client = engine_client(base_url)
         self.retries = retries
         self.retry_delay = retry_delay
-        self._routing: tuple[int, int] | None = None
-        self._image_pad: int | None = None
+        self._config: PreTrainedConfig | None = None
 
     async def request(
         self, method: str, path: str, payload: dict[str, Any] | None = None, headers: dict[str, str] | None = None
@@ -94,28 +93,30 @@ class SGLangEngine(InferenceEngine):
         except (KeyError, TypeError, ValueError) as e:
             raise InferenceEngineError(f"sglang reports no context length: {infos}") from e
 
-    async def routing(self) -> tuple[int, int]:
-        """Read once, from the config of the model sglang serves."""
-        if self._routing is None:
+    async def config(self) -> PreTrainedConfig:
+        """The config of the model sglang serves, read once."""
+        if self._config is None:
             path = (await self.request("GET", "/get_model_info"))["model_path"]
-            config = (await asyncio.to_thread(AutoConfig.from_pretrained, path)).get_text_config()
-            if not hasattr(config, "num_experts_per_tok"):
-                raise InferenceEngineError(f"sglang serves {path}, which routes to no experts")
-            # sglang sizes its routing row from these two, for every hidden layer, dense ones included.
-            self._routing = (config.num_hidden_layers, config.num_experts_per_tok)
-        return self._routing
+            self._config = cast(PreTrainedConfig, await asyncio.to_thread(AutoConfig.from_pretrained, path))
+        return self._config
+
+    async def routing(self) -> tuple[int, int]:
+        served = await self.config()
+        config = served.get_text_config()
+        if not hasattr(config, "num_experts_per_tok"):
+            raise InferenceEngineError(f"sglang serves {served.name_or_path}, which routes to no experts")
+        # sglang sizes its routing row from these two, for every hidden layer, dense ones included.
+        return config.num_hidden_layers, config.num_experts_per_tok
 
     async def image_pad(self) -> int:
-        """The id sglang expands per image, read once from the config of the model it serves."""
-        if self._image_pad is None:
-            path = (await self.request("GET", "/get_model_info"))["model_path"]
-            config = await asyncio.to_thread(AutoConfig.from_pretrained, path)
-            if getattr(config, "image_token_id", None) is None:
-                raise InferenceEngineError(f"sglang serves {path}, which takes no images")
-            self._image_pad = int(config.image_token_id)
-        return self._image_pad
+        """The id sglang expands per image."""
+        config = await self.config()
+        if getattr(config, "image_token_id", None) is None:
+            raise InferenceEngineError(f"sglang serves {config.name_or_path}, which takes no images")
+        return int(config.image_token_id)
 
-    def check_expansion(self, sent: list[int], expanded: list[int], images: Sequence[Image], pad: int) -> None:
+    @staticmethod
+    def check_expansion(sent: list[int], expanded: list[int], images: Sequence[Image], pad: int) -> None:
         """Refuse a prompt sglang did not build from `sent` by expanding each image's pad to its `tokens`.
 
         sglang re-tokenizes the decoded prompt when it cannot expand the ids it was sent, without failing the

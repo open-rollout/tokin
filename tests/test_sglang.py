@@ -102,7 +102,7 @@ class TestRouting:
 
         def from_pretrained(path):
             read.append(path)
-            return SimpleNamespace(get_text_config=lambda: SimpleNamespace(**configs[path]))
+            return SimpleNamespace(name_or_path=path, get_text_config=lambda: SimpleNamespace(**configs[path]))
 
         monkeypatch.setattr(sglang.AutoConfig, "from_pretrained", from_pretrained)
 
@@ -116,12 +116,12 @@ class TestRouting:
         assert [await engine.routing(), await engine.routing()] == [(46, 8)] * 2 and read == ["moe"]
 
     async def test_a_model_without_experts_is_refused(self, served):
-        with pytest.raises(InferenceEngineError, match="routes to no experts"):
+        with pytest.raises(InferenceEngineError, match="serves dense, which routes to no experts"):
             await served("dense")[0].routing()
 
 
 async def test_image_pad_of_a_model_without_images_is_refused(monkeypatch):
-    monkeypatch.setattr(sglang.AutoConfig, "from_pretrained", lambda path: SimpleNamespace())
+    monkeypatch.setattr(sglang.AutoConfig, "from_pretrained", lambda path: SimpleNamespace(name_or_path=path))
     engine = against(lambda request: httpx2.Response(200, json={"model_path": "text-only"}))
     with pytest.raises(InferenceEngineError, match="serves text-only, which takes no images"):
         await engine.image_pad()
@@ -129,7 +129,7 @@ async def test_image_pad_of_a_model_without_images_is_refused(monkeypatch):
 
 class TestCheckExpansion:
     def check(self, expanded, tokens=(3,)):
-        SGLangEngine("http://sglang/").check_expansion([1, 9, 2], expanded, [Image("data:a", n) for n in tokens], 9)
+        SGLangEngine.check_expansion([1, 9, 2], expanded, [Image("data:a", n) for n in tokens], 9)
 
     def test_passes_the_ids_sent_with_each_pad_expanded(self):
         self.check([1, 9, 9, 9, 2])
@@ -278,7 +278,7 @@ class TestGenerate:
     async def test_images_go_beside_their_pads_and_the_prompt_comes_back_checked(self):
         fake = FakeSGLang({**REPLY, "prompt_token_ids": [1, 9, 9, 9, 2]})
         engine = against(fake.handle)
-        engine._image_pad = 9
+        engine._config = SimpleNamespace(image_token_id=9)
         got = await engine.generate([1, 9, 2], {"max_tokens": 8}, [Image("data:a", 3)])
         [body] = fake.requests
         assert body["image_data"] == ["data:a"] and body["return_prompt_token_ids"] is True
