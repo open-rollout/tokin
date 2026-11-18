@@ -33,8 +33,8 @@ Say "Breaking:" first when an interface they call changes.>
 
 ## Decisions
 - @<author>: <choice>, over <the alternative>; <choice>, over <the alternative>.
-- Claude, agreed: <choice>: <half a line of reason>; <choice>: <reason>.
-- Claude, unreviewed: <choice>: <reason>; <choice>: <reason>.
+- @claude, agreed: <choice>: <half a line of reason>; <choice>: <reason>.
+- @claude: <choice>: <reason>; <choice>: <reason>.
 
 ## References
 - <project / file / doc whose behaviour this matches or departs from, one line each, a link where public>.
@@ -50,12 +50,12 @@ react to the new output).
 
 The share of a PR's design a human settled is part of its quality: a human choice was weighed by the person
 accountable for the code, an agent's default by nobody. So Decisions lists every choice a reviewer could reasonably
-make otherwise, one line per party, and a reviewer starts from the `unreviewed` line.
+make otherwise, one line per party, and a reviewer starts from the agent's own line.
 
 - `@<author>`, the human who opens the PR: what they chose or overrode, each with what it replaced.
-- `Claude, agreed`: what the agent proposed and the author said yes to. Silence, or merging the PR, is not a yes.
-- `Claude, unreviewed`: everything else, including choices the agent made without raising them.
-- The agent goes by its name without `@`: `@agent`, `@claude` are GitHub users.
+- `@claude, agreed`: what the agent proposed and the author said yes to. Silence, or merging the PR, is not a yes.
+- `@claude`: everything else, including choices the agent made without raising them.
+- The agent goes by its GitHub account: `@claude` for Claude, `@codex` for Codex.
 - A decision, not the conversation: no count of rounds, no slips the human caught (a wrong test, a stale comment).
   Those are the agent's to learn from, in its memory.
 - No `@<author>` line is a finding in itself: say so rather than leave the line out.
@@ -101,9 +101,9 @@ Breaking: a family sets `tool_call_parser = "<name>"` instead of `tool_parser = 
 - @Lawhy: an unreadable call renders back as the text the model wrote, over a 400; `tool_call_parser` a required
   string, over an optional instance; `get_tool_parser` returns an instance, over a class; the check inline in
   `conform`, over a helper.
-- Claude, agreed: `arguments` holds the whole block: a cut one has no closing tag to restore; a restored block renders
+- @claude, agreed: `arguments` holds the whole block: a cut one has no closing tag to restore; a restored block renders
   before any readable call beside it: content renders before `tool_calls`.
-- Claude, unreviewed: other non-JSON `arguments` are still refused: only a parser block has a known text; the name
+- @claude: other non-JSON `arguments` are still refused: only a parser block has a known text; the name
   `tool_call_parser`, sglang's flag; it resolves in the constructor, so an unknown name fails at build.
 
 ## References
