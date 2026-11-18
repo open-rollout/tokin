@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, ClassVar
 
-from ..rollout import Generation, GenerationParams
+from ..rollout import Generation, GenerationParams, Image
 
 
 class InferenceEngineError(RuntimeError):
@@ -48,5 +48,10 @@ class InferenceEngine(ABC):
         self,
         token_ids: list[int],
         params: GenerationParams,
+        images: Sequence[Image] = (),
     ) -> Generation:
+        """Sample a continuation of `token_ids`, in which each of `images` is one pad id, in order.
+
+        The engine expands each pad to the image's `tokens` and raises if it expanded anything else.
+        """
         raise NotImplementedError
