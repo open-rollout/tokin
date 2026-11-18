@@ -10,7 +10,6 @@ from tokin.gateway import (
     ContextLengthExceededError,
     GenerationAbortedError,
     ReservedParamsError,
-    UnsupportedParamsError,
 )
 from tokin.inference_engines import InferenceEngineError
 from tokin.rollout import FinishReason, Generation, GenerationUsage, Image, Support, TopLogprobs
@@ -163,21 +162,26 @@ class TestChat:
         await g.chat(s, ChatRequest([LOOK, REPLY, AGAIN]))
         assert g.engine.images == [[Image(PICTURE["image_url"]["url"], 4)]] * 2
 
-    async def test_an_image_counts_as_it_expands(self, gateway, chatml):
-        # The pad is one id of the prompt, the 2x2 image four positions of the engine's input.
-        ids = len(chatml.encode(chatml.apply([LOOK])))
-        g = gateway(said("ok"), context_length=ids + 3 + 3)
+    async def test_an_image_takes_a_pad_per_position(self, gateway, chatml):
+        # The template writes one pad; the 2x2 image is four positions of the model's input.
+        pad = chatml.image_pad_id
+        ids = [i for t in chatml.encode(chatml.apply([LOOK])) for i in ([t] * 4 if t == pad else [t])]
+        g = gateway(said("ok"), context_length=len(ids) + 3)
         reply = await g.chat(Session(), ChatRequest([LOOK], params={"max_tokens": 100}))
-        assert (g.engine.calls[0][1]["max_tokens"], reply.input_len) == (3, ids + 3)
+        assert (g.engine.calls[0][0], g.engine.calls[0][1]["max_tokens"], reply.input_len) == (ids, 3, len(ids))
 
     async def test_a_pad_written_as_text_is_refused(self, gateway):
         stray = {"role": "user", "content": [{"type": "text", "text": PAD}, PICTURE]}
         with pytest.raises(ChatTemplateError, match="2 image pads for 1 images"):
             await gateway().chat(Session(), ChatRequest([stray]))
 
-    async def test_routed_experts_with_images_are_refused(self, gateway):
-        with pytest.raises(UnsupportedParamsError, match="return_routed_experts is not supported with images"):
-            await gateway().chat(Session(), ChatRequest([LOOK], params={"return_routed_experts": True}))
+    async def test_routing_covers_every_position_of_an_image(self, gateway, chatml):
+        pad = chatml.image_pad_id
+        n = sum(4 if t == pad else 1 for t in chatml.encode(chatml.apply([LOOK])))
+        reply = Generation([ord("o"), ord("k"), ord(END)], FinishReason.STOP, routed_experts=rows(*range(n + 2)))
+        g, s = gateway(reply, routing=(1, 1)), Session()
+        await g.chat(s, ChatRequest([LOOK], params={"return_routed_experts": True}))
+        assert s.rollouts[0].routed_experts(layers=1, top_k=1).ravel().tolist() == list(range(n + 2))
 
     async def test_logprobs_are_on_unless_turned_off(self, gateway):
         g = gateway(said("ok"), said("ok"))

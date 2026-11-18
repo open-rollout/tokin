@@ -50,8 +50,8 @@ class InferenceEngine(ABC):
         params: GenerationParams,
         images: Sequence[Image] = (),
     ) -> Generation:
-        """Sample a continuation of `token_ids`, in which each of `images` is one pad id, in order.
+        """Sample a continuation of `token_ids`, in which each of `images` takes `tokens` consecutive pads, in order.
 
-        The engine expands each pad to the image's `tokens` and raises if it expanded anything else.
+        The engine raises unless the model saw exactly `token_ids`.
         """
         raise NotImplementedError

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import itertools
 import json
 import logging
 from collections.abc import Callable, Sequence
@@ -116,41 +117,39 @@ class SGLangEngine(InferenceEngine):
         return int(config.image_token_id)
 
     @staticmethod
-    def check_expansion(sent: list[int], expanded: list[int], images: Sequence[Image], pad: int) -> None:
-        """Refuse a prompt sglang did not build from `sent` by expanding each image's pad to its `tokens`.
+    def check_expansion(token_ids: list[int], seen: list[int], images: Sequence[Image], pad: int) -> None:
+        """Refuse a prompt `seen` that is not `token_ids`, each image's pads expanded by sglang itself.
 
         sglang re-tokenizes the decoded prompt when it cannot expand the ids it was sent, without failing the
         request; only the prompt it returns shows it.
         """
-        folded: list[int] = []
-        runs: list[int] = []
-        for i, token in enumerate(expanded):
-            if token == pad and i and expanded[i - 1] == pad:
-                runs[-1] += 1
-                continue
-            folded.append(token)
-            if token == pad:
-                runs.append(1)
-        if folded != sent:
-            at = next(
-                (i for i, (a, b) in enumerate(zip(folded, sent, strict=False)) if a != b), min(len(folded), len(sent))
-            )
-            raise InferenceEngineError(
-                f"sglang's prompt, its images folded, differs from the {len(sent)} ids sent at position {at}: "
-                "it re-tokenized them (`--mm-preprocess-cache-size-mb` keeps them)"
-            )
+        if seen == token_ids:
+            return
+        runs = [len(list(run)) for token, run in itertools.groupby(seen) if token == pad]
         if runs != [image.tokens for image in images]:
             raise InferenceEngineError(
                 f"sglang expanded the images to {runs} tokens, where the HF processor counts "
                 f"{[image.tokens for image in images]}"
             )
+        at = next((i for i, (a, b) in enumerate(zip(seen, token_ids, strict=False)) if a != b), len(token_ids))
+        raise InferenceEngineError(
+            f"sglang's prompt differs from the {len(token_ids)} ids the model was to see at position {at}: "
+            "it re-tokenized them (`--mm-preprocess-cache-size-mb` keeps them)"
+        )
 
     async def generate(
         self, token_ids: list[int], params: GenerationParams, images: Sequence[Image] = ()
     ) -> Generation:
         payload: dict[str, Any] = {"input_ids": token_ids, "stream": False, "sampling_params": {}}
         if images:
-            payload |= {"image_data": [image.url for image in images], "return_prompt_token_ids": True}
+            pad = await self.image_pad()
+            # sglang expands an image's one pad itself, so each image's pads go as one.
+            folded = [t for i, t in enumerate(token_ids) if t != pad or not i or token_ids[i - 1] != pad]
+            payload |= {
+                "input_ids": folded,
+                "image_data": [image.url for image in images],
+                "return_prompt_token_ids": True,
+            }
         sent = cast(GenerationParams, {k: v for k, v in params.items() if k != "session_id"})
         for name, value in self.translate(sent).items():
             target = payload if name in self.top_level_keys else payload["sampling_params"]
@@ -164,9 +163,7 @@ class SGLangEngine(InferenceEngine):
         if images:
             if "prompt_token_ids" not in out:
                 raise InferenceEngineError("sglang returned no prompt_token_ids to check its image expansion against")
-            await asyncio.to_thread(
-                self.check_expansion, token_ids, out["prompt_token_ids"], images, await self.image_pad()
-            )
+            await asyncio.to_thread(self.check_expansion, token_ids, out["prompt_token_ids"], images, pad)
         return await asyncio.to_thread(self.read, out, params)
 
     def read(self, out: dict[str, Any], params: GenerationParams) -> Generation:

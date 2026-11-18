@@ -128,14 +128,14 @@ async def test_image_pad_of_a_model_without_images_is_refused(monkeypatch):
 
 
 class TestCheckExpansion:
-    def check(self, expanded, tokens=(3,)):
-        SGLangEngine.check_expansion([1, 9, 2], expanded, [Image("data:a", n) for n in tokens], 9)
+    def check(self, seen):
+        SGLangEngine.check_expansion([1, 9, 9, 9, 2], seen, [Image("data:a", 3)], 9)
 
-    def test_passes_the_ids_sent_with_each_pad_expanded(self):
+    def test_passes_the_ids_the_model_was_to_see(self):
         self.check([1, 9, 9, 9, 2])
 
     def test_refuses_a_prompt_re_tokenized(self):
-        with pytest.raises(InferenceEngineError, match="differs from the 3 ids sent at position 2"):
+        with pytest.raises(InferenceEngineError, match="differs from the 5 ids the model was to see at position 4"):
             self.check([1, 9, 9, 9, 4, 2])
 
     def test_refuses_an_image_counted_otherwise(self):
@@ -275,18 +275,21 @@ class TestGenerate:
         assert body["return_routed_experts"] is True and body["routed_experts_start_len"] == 9
         assert "routed_experts_start_len" not in body["sampling_params"] and got.routed_experts == buffer
 
-    async def test_images_go_beside_their_pads_and_the_prompt_comes_back_checked(self):
+    async def test_each_image_goes_as_one_pad_and_its_expansion_comes_back_checked(self):
         fake = FakeSGLang({**REPLY, "prompt_token_ids": [1, 9, 9, 9, 2]})
         engine = against(fake.handle)
         engine._config = SimpleNamespace(image_token_id=9)
-        got = await engine.generate([1, 9, 2], {"max_tokens": 8}, [Image("data:a", 3)])
+        got = await engine.generate([1, 9, 9, 9, 2], {"max_tokens": 8}, [Image("data:a", 3)])
         [body] = fake.requests
-        assert body["image_data"] == ["data:a"] and body["return_prompt_token_ids"] is True
+        assert body["input_ids"] == [1, 9, 2] and body["image_data"] == ["data:a"]
+        assert body["return_prompt_token_ids"] is True
         assert got.token_ids == [5, 6, 3]
 
     async def test_images_without_the_prompt_back_are_refused(self):
+        engine = against(FakeSGLang().handle)
+        engine._config = SimpleNamespace(image_token_id=9)
         with pytest.raises(InferenceEngineError, match="no prompt_token_ids"):
-            await against(FakeSGLang().handle).generate([1, 9, 2], {"max_tokens": 8}, [Image("data:a", 3)])
+            await engine.generate([1, 9, 9, 9, 2], {"max_tokens": 8}, [Image("data:a", 3)])
 
     async def test_unknown_keys_are_sampling_params(self):
         fake = FakeSGLang()
