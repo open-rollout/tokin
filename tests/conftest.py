@@ -88,6 +88,7 @@ def chatml():
 class Engine(InferenceEngine):
     def __init__(self, *replies, context_length=1000, routing=None):
         self.replies, self.calls, self.length, self.row = list(replies), [], context_length, routing
+        self.images = []
 
     async def ready(self):
         pass
@@ -98,8 +99,9 @@ class Engine(InferenceEngine):
     async def routing(self):
         return self.row or await super().routing()
 
-    async def generate(self, token_ids, params):
+    async def generate(self, token_ids, params, images=()):
         self.calls.append((token_ids, params))
+        self.images.append(list(images))
         return self.replies.pop(0)
 
 
