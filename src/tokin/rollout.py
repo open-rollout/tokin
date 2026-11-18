@@ -12,13 +12,27 @@ from .messages import Message, ToolSchema
 
 
 @dataclass(frozen=True, slots=True)
+class Image:
+    """An image at `url`, one pad id in a prompt, which the engine expands to `tokens` positions."""
+
+    url: str
+    tokens: int
+
+
+@dataclass(frozen=True, slots=True)
 class Prompt:
-    """Ids the harness's messages rendered to, as the engine received them."""
+    """Ids the harness's messages rendered to, as the engine received them, with the images their pads stand for."""
 
     token_ids: list[int]
+    images: tuple[Image, ...] = ()
 
     def __len__(self) -> int:
         return len(self.token_ids)
+
+    @property
+    def expanded(self) -> int:
+        """The length as the engine and the trainer count it, each image's pad expanded."""
+        return len(self.token_ids) + sum(image.tokens - 1 for image in self.images)
 
 
 class GenerationParams(TypedDict, total=False):
@@ -225,6 +239,16 @@ class Rollout:
             chunks.append(x.reshape(rows, layers, top_k)[: positions - covered])
             covered = positions
         return np.concatenate(chunks) if chunks else np.empty((0, layers, top_k), dtype=np.int32)
+
+    @property
+    def images(self) -> list[Image]:
+        """Every prompt's images, in the order of their pads in `token_ids`."""
+        return [image for t in self.turns for image in t.prompt.images]
+
+    @property
+    def expanded(self) -> int:
+        """The length as the engine and the trainer count it, each image's pad expanded."""
+        return sum(t.prompt.expanded + len(t.generation) for t in self.turns)
 
     def __len__(self) -> int:
         return sum(len(t.prompt) + len(t.generation) for t in self.turns)
