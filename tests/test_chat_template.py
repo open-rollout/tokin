@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from conftest import CHATML, END, START, ChatML, FakeTokenizer
+from conftest import CHATML, END, PAD, START, ChatML, FakeTokenizer, image
 
 from tokin.chat_templates import ChatTemplateError, get_chat_template
 from tokin.rollout import FinishReason, Generation
@@ -32,10 +32,47 @@ def test_conform_joins_text_parts():
     assert ChatML(FakeTokenizer()).conform([{"role": "user", "content": parts}]) == [{"role": "user", "content": "ab"}]
 
 
-def test_conform_refuses_non_text_content():
-    image = {"type": "image_url", "image_url": {"url": "u"}}
-    with pytest.raises(ChatTemplateError, match="text"):
-        ChatML(FakeTokenizer()).conform([{"role": "user", "content": [image]}])
+def test_apply_renders_each_image_as_one_pad_where_it_stands():
+    look = {"role": "user", "content": [{"type": "text", "text": "see "}, image(1, 1)]}
+    again = {"role": "user", "content": [image(2, 1), {"type": "text", "text": "and"}]}
+    text = ChatML(FakeTokenizer()).apply([look, {"role": "assistant", "content": "ok"}, again])
+    assert text.count(PAD) == 2 and f"see {PAD}" in text and f"{PAD}and" in text
+
+
+def test_image_tokens_are_the_processors_count():
+    assert ChatML(FakeTokenizer()).image_tokens(image(2, 3)["image_url"]["url"]) == 6
+
+
+class TestConformRefuses:
+    def conform(self, *parts, template=ChatML, **kwargs):
+        return template(FakeTokenizer(), **kwargs).conform([{"role": "user", "content": list(parts)}])
+
+    def test_parts_other_than_text_and_images(self):
+        audio = {"type": "input_audio", "input_audio": {"data": "", "format": "wav"}}
+        with pytest.raises(ChatTemplateError, match="only text and image_url"):
+            self.conform(image(1, 1), audio)
+
+    def test_images_without_a_pad(self):
+        with pytest.raises(ChatTemplateError, match="renders no images"):
+            self.conform(image(1, 1), template=type("Blind", (ChatML,), {"image_pad": ""}))
+
+    def test_vision_ids(self):
+        with pytest.raises(ChatTemplateError, match="add_vision_id"):
+            self.conform(image(1, 1), add_vision_id=True)
+
+    def test_a_detail_other_than_auto(self):
+        with pytest.raises(ChatTemplateError, match=r"detail \['high'\]"):
+            self.conform({"type": "image_url", "image_url": {"url": "data:,", "detail": "high"}})
+
+
+def test_image_tokens_refuses_a_url_that_is_not_data():
+    with pytest.raises(ChatTemplateError, match="only data: image URLs"):
+        ChatML(FakeTokenizer()).image_tokens("https://example.com/a.png")
+
+
+def test_image_tokens_refuses_data_that_is_no_image():
+    with pytest.raises(ChatTemplateError, match="does not decode"):
+        ChatML(FakeTokenizer()).image_tokens("data:image/png;base64,aGk=")
 
 
 def test_conform_refuses_arguments_that_are_not_json():

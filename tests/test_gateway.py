@@ -2,8 +2,9 @@ import asyncio
 
 import numpy as np
 import pytest
-from conftest import END, said
+from conftest import END, image, said
 
+from tokin.chat_templates import ChatTemplateError
 from tokin.gateway import (
     ChatRequest,
     ContextLengthExceededError,
@@ -137,6 +138,10 @@ class TestChat:
     async def test_prompt_past_the_context_is_refused(self, gateway):
         with pytest.raises(ContextLengthExceededError):
             await gateway(context_length=5).chat(Session(), ChatRequest([USER]))
+
+    async def test_images_are_refused_until_the_engine_is_sent_them(self, gateway):
+        with pytest.raises(ChatTemplateError, match="images are not supported yet"):
+            await gateway().chat(Session(), ChatRequest([{"role": "user", "content": [image(1, 1)]}]))
 
     async def test_max_tokens_are_capped_to_the_room_left(self, gateway, chatml):
         g = gateway(said("ok"), context_length=len(chatml.encode(chatml.apply([USER]))) + 3)

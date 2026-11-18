@@ -29,6 +29,7 @@ dependencies = [
     "jinja2>=3.1",
     "numpy>=2",
     "openai>=2",
+    "pillow>=11",
     "pydantic>=2",
     "safetensors>=0.4",
     "transformers>=5.6",
