@@ -16,6 +16,7 @@ from .rollout import (
     Generation,
     GenerationParams,
     GenerationUsage,
+    Image,
     Prompt,
     Rollout,
     Support,
@@ -114,7 +115,8 @@ class Session:
 
         Each turn `t` is stored once, however many rollouts run through it:
 
-            `{t}.prompt`          `int32`    the ids rendered for it
+            `{t}.prompt`          `int32`    the ids rendered for it, one pad id per image
+            `{t}.image_tokens`    `int32`    the tokens each of its images expands to, when it has images
             `{t}.generation`      `int32`    the ids sampled
             `{t}.logprobs`        `float32`  the generation's logprobs, when it carries them
             `{t}.routed_experts`  `int32`    the generation's routing, the engine's buffer as it came
@@ -126,16 +128,19 @@ class Session:
         `metadata` is UTF-8 JSON as uint8, a tensor because `safetensors.numpy.load` drops header metadata:
 
             `{"id": ..., "params": {...}, "turns": [{"parent": ..., "id": ..., "finish_reason": ..., "messages": [...],
-            "tools": [...], "weight_versions": [...], "usage": {...}}]}`
+            "tools": [...], "weight_versions": [...], "usage": {...}, "images": [url, ...]}]}`
 
-        in the order the turns were served, so `parent` indexes `turns`. Rollouts, loss masks, flat logprobs and routing
-        are left out: `Session.rollout` and a `Rollout` derive them.
+        `images` only for a turn with images, their URLs in the order of their pads, the order `image_tokens` counts.
+        The turns are in the order they were served, so `parent` indexes `turns`. Rollouts, loss masks, flat logprobs
+        and routing are left out: `Session.rollout` and a `Rollout` derive them.
         """
         tensors: dict[str, np.ndarray] = {}
         turns = []
         for t, turn in enumerate(self.turns):
             tensors[f"{t}.prompt"] = np.array(turn.prompt.token_ids, dtype=np.int32)
             tensors[f"{t}.generation"] = np.array(turn.generation.token_ids, dtype=np.int32)
+            if turn.prompt.images:
+                tensors[f"{t}.image_tokens"] = np.array([image.tokens for image in turn.prompt.images], dtype=np.int32)
             if turn.generation.logprobs is not None:
                 tensors[f"{t}.logprobs"] = np.array(turn.generation.logprobs, dtype=np.float32)
             if turn.generation.routed_experts is not None:
@@ -156,6 +161,7 @@ class Session:
                     "tools": turn.tools,
                     "weight_versions": turn.generation.weight_versions,
                     "usage": asdict(turn.generation.usage),
+                    **({"images": [image.url for image in turn.prompt.images]} if turn.prompt.images else {}),
                 }
             )
         meta = json.dumps({"id": self.id, "params": self.params, "turns": turns}).encode()
@@ -188,7 +194,9 @@ class Session:
                 weight_versions=tuple((v, start, end) for v, start, end in turn["weight_versions"]),
                 usage=GenerationUsage(**turn["usage"]),
             )
-            prompt = Prompt(tensors[f"{t}.prompt"].tolist())
+            tokens = tensors[f"{t}.image_tokens"].tolist() if f"{t}.image_tokens" in tensors else []
+            images = tuple(Image(url, n) for url, n in zip(turn.get("images", []), tokens, strict=True))
+            prompt = Prompt(tensors[f"{t}.prompt"].tolist(), images)
             turns.append(Turn(prompt, generation, turn["messages"], turn["parent"], turn["tools"], turn["id"]))
         return cls(meta["id"], turns, meta["params"])
 
