@@ -37,7 +37,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-harbor = ["e2b>=2.25", "harbor[e2b]>=0.24,<0.25", "uv>=0.9"]
+harbor = ["e2b>=2.25", "harbor[e2b]>=0.24,<0.27", "uv>=0.9"]
 
 [project.scripts]
 tokin = "tokin.cli:main"
